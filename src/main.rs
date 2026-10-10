@@ -10,14 +10,12 @@ use std::time::Duration;
 use sysinfo::{Networks, System};
 
 fn main() -> io::Result<()> {
-    // Terminal im Raw-Modus starten
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, event::EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Daten initialisieren
     let mut dmesg_lines: Vec<String> = Vec::with_capacity(5000);
     if let Ok(out) = Command::new("dmesg").output() {
         dmesg_lines = String::from_utf8_lossy(&out.stdout)
@@ -33,7 +31,6 @@ fn main() -> io::Result<()> {
 
     let res = run_app(&mut terminal, &mut dmesg_lines, &mut search, &mut scroll, &mut sys, &mut nets);
 
-    // Terminal wiederherstellen (wichtig bei Exit oder Panik)
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -58,17 +55,20 @@ fn run_app<B: Backend>(
         nets.refresh();
 
         terminal.draw(|f| {
-            let chunks = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Min(12),
-                Constraint::Length(10),
-            ])
-            .split(f.area());
+            // Layout für Ratatui 0.24.0
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(12),
+                    Constraint::Length(10),
+                ])
+                .split(f.size()); // f.size() statt f.area()
 
             // 1. Suchleiste
             f.render_widget(
                 Paragraph::new(format!("Search: {} | q=quit", search))
-                    .block(Block::bordered().title("Filter")),
+                    .block(Block::default().borders(Borders::ALL).title("Filter")),
                 chunks[0],
             );
 
@@ -82,7 +82,11 @@ fn run_app<B: Backend>(
                 .collect();
             
             f.render_widget(
-                List::new(filtered).block(Block::bordered().title(format!("dmesg (Total: {})", dmesg_lines.len()))),
+                List::new(filtered).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!("dmesg (Total: {})", dmesg_lines.len()))
+                ),
                 chunks[1],
             );
 
@@ -96,7 +100,7 @@ fn run_app<B: Backend>(
             let ports = std::fs::read_to_string("/proc/net/tcp").unwrap_or_default();
             let info = format!(
                 "Uptime: {}s | CPU: {:.1}% | Mem: {}MB\nNets: {}\nOpen/Listen:\n{}",
-                sys.uptime(),
+                System::uptime(), // Uptime als assoziierte Funktion
                 sys.global_cpu_usage(),
                 sys.total_memory() / 1024 / 1024,
                 if net_str.is_empty() { "None".to_string() } else { net_str },
@@ -104,36 +108,37 @@ fn run_app<B: Backend>(
             );
 
             f.render_widget(
-                Paragraph::new(info).block(Block::bordered().title("System & Ports")),
+                Paragraph::new(info).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("System & Ports")
+                ),
                 chunks[2],
             );
         })?;
 
-        // Event-Handling korrigiert (verhindert doppelten Event-Read)
         if event::poll(Duration::from_millis(150))? {
             match event::read()? {
-                Event::Key(k) => {
-                    match k.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char(c) => {
-                            search.push(c);
-                            *scroll = 0; // Bei Suche nach oben springen
-                        }
-                        KeyCode::Backspace => {
-                            search.pop();
-                            *scroll = 0;
-                        }
-                        KeyCode::Up => {
-                            if *scroll > 0 {
-                                *scroll -= 1;
-                            }
-                        }
-                        KeyCode::Down => {
-                            *scroll += 1;
-                        }
-                        _ => {}
+                Event::Key(k) => match k.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char(c) => {
+                        search.push(c);
+                        *scroll = 0;
                     }
-                }
+                    KeyCode::Backspace => {
+                        search.pop();
+                        *scroll = 0;
+                    }
+                    KeyCode::Up => {
+                        if *scroll > 0 {
+                            *scroll -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        *scroll += 1;
+                    }
+                    _ => {}
+                },
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         if *scroll > 0 {
