@@ -59,3 +59,4 @@ fn main() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
     Ok(())
+}
