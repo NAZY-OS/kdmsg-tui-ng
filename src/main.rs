@@ -19,7 +19,7 @@ fn main() -> io::Result<()> {
     let mut dmesg_lines: Vec<String> = Vec::with_capacity(5000);
     let mut search = String::new();
     let mut scroll: usize = 0;
-    let mut auto_scroll = true; // Springt automatisch nach unten bei neuen Logs
+    let mut auto_scroll = true;
 
     let mut sys = System::new_all();
     let mut nets = Networks::new_with_refreshed_list();
@@ -27,7 +27,6 @@ fn main() -> io::Result<()> {
     let mut last_refresh = Instant::now();
     let refresh_interval = Duration::from_secs(2);
 
-    // Initiales Laden
     update_dmesg_buffer(&mut dmesg_lines, &mut scroll, auto_scroll);
 
     let res = run_app(
@@ -64,7 +63,6 @@ fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll: &mut usize, auto_s
         let old_len = dmesg_lines.len();
         *dmesg_lines = new_lines;
 
-        // Auto-Scroll zum Ende, wenn neue Zeilen hinzukommen und Auto-Scroll aktiv ist
         if auto_scroll && dmesg_lines.len() > old_len {
             if dmesg_lines.len() > 20 {
                 *scroll = dmesg_lines.len() - 20;
@@ -75,7 +73,7 @@ fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll: &mut usize, auto_s
     }
 }
 
-/// Generiert einen kleinen ASCII-Graph/Fortschrittsbalken
+/// Generiert einen ASCII-Fortschrittsbalken
 fn render_bar(current: u64, total: u64, width: usize) -> String {
     if total == 0 {
         return "[--------------------]".to_string();
@@ -86,7 +84,7 @@ fn render_bar(current: u64, total: u64, width: usize) -> String {
     format!("[{}{}] {:.1}%", "█".repeat(filled), "-".repeat(empty), (current as f64 / total as f64) * 100.0)
 }
 
-/// Formatiert Sekunden in ein lesbares Format (Tage, Stunden, Minuten, Sekunden)
+/// Formatiert Sekunden in ein lesbares Format
 fn format_uptime(seconds: u64) -> String {
     let days = seconds / 86400;
     let hours = (seconds % 86400) / 3600;
@@ -113,7 +111,6 @@ fn run_app<B: Backend>(
     refresh_interval: Duration,
 ) -> io::Result<()> {
     loop {
-        // Auto-Rotate Intervall prüfen
         if last_refresh.elapsed() >= refresh_interval {
             update_dmesg_buffer(dmesg_lines, scroll, *auto_scroll);
             *last_refresh = Instant::now();
@@ -159,7 +156,9 @@ fn run_app<B: Backend>(
             );
 
             // 3. System- & Netzwerk-Infos mit Graphen
-            let distro = System::long_os_release().unwrap_or_else(|| "Linux".to_string());
+            let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
+            let os_ver = System::os_version().unwrap_or_default();
+            let distro = format!("{} {}", os_name, os_ver);
             let uptime = format_uptime(System::uptime());
             
             let total_ram = sys.total_memory();
@@ -182,7 +181,7 @@ fn run_app<B: Backend>(
                 .skip(1)
                 .take(3)
                 .map(|l| {
-                    let parts: Vec<&string = l.split_whitespace().collect(); // Fallback representation
+                    let _parts: Vec<&str> = l.split_whitespace().collect();
                     l.to_string()
                 })
                 .collect();
@@ -194,7 +193,7 @@ fn run_app<B: Backend>(
                 ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
                 swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
                 if net_str.is_empty() { "No active interfaces".to_string() } else { net_str },
-                if listen_ports.is_empty() { "None".to_string() } else { ports.lines().take(3).collect::<Vec<_>>().join("\n") }
+                if listen_ports.is_empty() { "None".to_string() } else { listen_ports.join("\n") }
             );
 
             f.render_widget(
@@ -229,7 +228,6 @@ fn run_app<B: Backend>(
                     }
                     KeyCode::Down => {
                         *scroll += 1;
-                        // Wenn ganz unten, Auto-Scroll wieder aktivieren
                         if *scroll + 20 >= dmesg_lines.len() {
                             *auto_scroll = true;
                         }
