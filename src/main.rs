@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{self, Event, KeyCode, MouseEventKind},
+    event::{self, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -8,6 +8,15 @@ use std::io;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use sysinfo::{Networks, System};
+
+#[derive(PartialEq, Clone, Copy)]
+enum LogFilter {
+    All,
+    Warn,
+    Info,
+    Err,
+    Notice,
+}
 
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
@@ -18,8 +27,10 @@ fn main() -> io::Result<()> {
 
     let mut dmesg_lines: Vec<String> = Vec::with_capacity(5000);
     let mut search = String::new();
-    let mut scroll: usize = 0;
+    let mut scroll_y: usize = 0;
+    let mut scroll_x: usize = 0;
     let mut auto_scroll = true;
+    let mut active_filter = LogFilter::All;
 
     let mut sys = System::new_all();
     let mut nets = Networks::new_with_refreshed_list();
@@ -27,14 +38,16 @@ fn main() -> io::Result<()> {
     let mut last_refresh = Instant::now();
     let refresh_interval = Duration::from_secs(2);
 
-    update_dmesg_buffer(&mut dmesg_lines, &mut scroll, auto_scroll);
+    update_dmesg_buffer(&mut dmesg_lines, &mut scroll_y, auto_scroll, 20);
 
     let res = run_app(
         &mut terminal,
         &mut dmesg_lines,
         &mut search,
-        &mut scroll,
+        &mut scroll_y,
+        &mut scroll_x,
         &mut auto_scroll,
+        &mut active_filter,
         &mut sys,
         &mut nets,
         &mut last_refresh,
@@ -52,8 +65,7 @@ fn main() -> io::Result<()> {
     res
 }
 
-/// Lädt dmesg mit human-readable timestamps (-T) und Kernel-only (-k)
-fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll: &mut usize, auto_scroll: bool) {
+fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll_y: &mut usize, auto_scroll: bool, page_size: usize) {
     if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
         let new_lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -64,16 +76,15 @@ fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll: &mut usize, auto_s
         *dmesg_lines = new_lines;
 
         if auto_scroll && dmesg_lines.len() > old_len {
-            if dmesg_lines.len() > 20 {
-                *scroll = dmesg_lines.len() - 20;
+            if dmesg_lines.len() > page_size {
+                *scroll_y = dmesg_lines.len() - page_size;
             } else {
-                *scroll = 0;
+                *scroll_y = 0;
             }
         }
     }
 }
 
-/// Generiert einen ASCII-Fortschrittsbalken
 fn render_bar(current: u64, total: u64, width: usize) -> String {
     if total == 0 {
         return "[--------------------]".to_string();
@@ -84,7 +95,6 @@ fn render_bar(current: u64, total: u64, width: usize) -> String {
     format!("[{}{}] {:.1}%", "█".repeat(filled), "-".repeat(empty), (current as f64 / total as f64) * 100.0)
 }
 
-/// Formatiert Sekunden in ein lesbares Format
 fn format_uptime(seconds: u64) -> String {
     let days = seconds / 86400;
     let hours = (seconds % 86400) / 3600;
@@ -99,20 +109,43 @@ fn format_uptime(seconds: u64) -> String {
     }
 }
 
+/// Berechnet das exakte Startdatum und die Uhrzeit des letzten Boots
+fn get_boot_time_string(uptime_seconds: u64) -> String {
+    if let Ok(duration_since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let current_epoch = duration_since_epoch.as_secs();
+        if current_epoch >= uptime_seconds {
+            let boot_epoch = current_epoch - uptime_seconds;
+            // Einfache Umrechnung von Epoch in lesbares Datum/Zeit via Standard-Befehl 'date' (zuverlässig auf Linux)
+            if let Ok(out) = Command::new("date").args(["-d", &format!("@{}", boot_epoch), "+%Y-%m-%d %H:%M:%S"]).output() {
+                let time_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !time_str.is_empty() {
+                    return time_str;
+                }
+            }
+        }
+    }
+    "Unknown".to_string()
+}
+
 fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     dmesg_lines: &mut Vec<String>,
     search: &mut String,
-    scroll: &mut usize,
+    scroll_y: &mut usize,
+    scroll_x: &mut usize,
     auto_scroll: &mut bool,
+    active_filter: &mut LogFilter,
     sys: &mut System,
     nets: &mut Networks,
     last_refresh: &mut Instant,
     refresh_interval: Duration,
 ) -> io::Result<()> {
     loop {
+        let size = terminal.size()?;
+        let list_height = if size.height > 16 { (size.height - 14) as usize } else { 10 };
+
         if last_refresh.elapsed() >= refresh_interval {
-            update_dmesg_buffer(dmesg_lines, scroll, *auto_scroll);
+            update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
             *last_refresh = Instant::now();
         }
 
@@ -124,42 +157,77 @@ fn run_app<B: Backend>(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(3),
-                    Constraint::Min(12),
+                    Constraint::Min(list_height as u16 + 2),
                     Constraint::Length(11),
                 ])
                 .split(f.size());
 
-            // 1. Suchleiste
-            let auto_status = if *auto_scroll { "ON" } else { "OFF (Manual Scroll)" };
+            // 1. Steuerungsleiste mit Shortcuts
+            let auto_status = if *auto_scroll { "ON" } else { "OFF" };
+            let filter_str = match active_filter {
+                LogFilter::All => "ALL",
+                LogFilter::Warn => "WARN (F2)",
+                LogFilter::Info => "INFO (F3)",
+                LogFilter::Err => "ERR (F4)",
+                LogFilter::Notice => "NOTICE (F6)",
+            };
+            let top_text = format!(
+                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [F2-F6]filter [←/→]h-scroll",
+                search, filter_str, auto_status
+            );
             f.render_widget(
-                Paragraph::new(format!("Search: {} | Auto-Scroll: {} | q=quit", search, auto_status))
-                    .block(Block::default().borders(Borders::ALL).title("Filter & Control")),
+                Paragraph::new(top_text)
+                    .block(Block::default().borders(Borders::ALL).title("Control Panel")),
                 chunks[0],
             );
 
             // 2. Dmesg Liste
-            let filtered: Vec<ListItem> = dmesg_lines
+            let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
-                .filter(|l| l.contains(&*search))
-                .skip(*scroll)
-                .take(20)
-                .map(|l| ListItem::new(l.as_str()))
+                .filter(|l| {
+                    let matches_search = l.contains(&*search);
+                    let matches_filter = match active_filter {
+                        LogFilter::All => true,
+                        LogFilter::Warn => l.to_lowercase().contains("warn"),
+                        LogFilter::Info => l.to_lowercase().contains("info"),
+                        LogFilter::Err => l.to_lowercase().contains("err") || l.to_lowercase().contains("fail"),
+                        LogFilter::Notice => l.to_lowercase().contains("notice"),
+                    };
+                    matches_search && matches_filter
+                })
+                .collect();
+
+            let display_items: Vec<ListItem> = filtered_lines
+                .iter()
+                .skip(*scroll_y)
+                .take(list_height)
+                .map(|l| {
+                    let truncated = if *scroll_x < l.len() {
+                        &l[*scroll_x..]
+                    } else {
+                        ""
+                    };
+                    ListItem::new(truncated)
+                })
                 .collect();
             
             f.render_widget(
-                List::new(filtered).block(
+                List::new(display_items).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("dmesg (Human Timestamps - Total: {})", dmesg_lines.len()))
+                        .title(format!("dmesg (Current Boot - Shown: {}/{})", filtered_lines.len(), dmesg_lines.len()))
                 ),
                 chunks[1],
             );
 
-            // 3. System- & Netzwerk-Infos mit Graphen
+            // 3. System- & Hardware-Infos inklusive Start-Datum & Uptime
             let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
             let os_ver = System::os_version().unwrap_or_default();
             let distro = format!("{} {}", os_name, os_ver);
-            let uptime = format_uptime(System::uptime());
+            
+            let up_secs = System::uptime();
+            let uptime_str = format_uptime(up_secs);
+            let boot_time_str = get_boot_time_string(up_secs);
             
             let total_ram = sys.total_memory();
             let used_ram = sys.used_memory();
@@ -176,20 +244,13 @@ fn run_app<B: Backend>(
                 .join(" | ");
 
             let ports = std::fs::read_to_string("/proc/net/tcp").unwrap_or_default();
-            let listen_ports: Vec<String> = ports
-                .lines()
-                .skip(1)
-                .take(3)
-                .map(|l| {
-                    let _parts: Vec<&str> = l.split_whitespace().collect();
-                    l.to_string()
-                })
-                .collect();
+            let listen_ports: Vec<&str> = ports.lines().skip(1).take(3).collect();
 
             let info = format!(
-                "OS: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}\nPorts (Listen):\n{}",
+                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}\nPorts (Listen):\n{}",
                 distro,
-                uptime,
+                boot_time_str,
+                uptime_str,
                 ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
                 swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
                 if net_str.is_empty() { "No active interfaces".to_string() } else { net_str },
@@ -210,42 +271,81 @@ fn run_app<B: Backend>(
             match event::read()? {
                 Event::Key(k) => match k.code {
                     KeyCode::Char('q') => break,
+                    KeyCode::Char('r') => {
+                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+                    }
+                    KeyCode::F(2) => {
+                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
+                        *scroll_y = 0;
+                    }
+                    KeyCode::F(3) => {
+                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
+                        *scroll_y = 0;
+                    }
+                    KeyCode::F(4) => {
+                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
+                        *scroll_y = 0;
+                    }
+                    KeyCode::F(6) => {
+                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
+                        *scroll_y = 0;
+                    }
                     KeyCode::Char(c) => {
                         search.push(c);
-                        *scroll = 0;
+                        *scroll_y = 0;
                         *auto_scroll = false;
                     }
                     KeyCode::Backspace => {
                         search.pop();
-                        *scroll = 0;
+                        *scroll_y = 0;
                         *auto_scroll = false;
                     }
                     KeyCode::Up => {
                         *auto_scroll = false;
-                        if *scroll > 0 {
-                            *scroll -= 1;
+                        if *scroll_y > 0 {
+                            *scroll_y -= 1;
                         }
                     }
                     KeyCode::Down => {
-                        *scroll += 1;
-                        if *scroll + 20 >= dmesg_lines.len() {
+                        *scroll_y += 1;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
                             *auto_scroll = true;
                         }
+                    }
+                    KeyCode::Left => {
+                        if *scroll_x > 0 {
+                            *scroll_x -= 3;
+                        }
+                    }
+                    KeyCode::Right => {
+                        *scroll_x += 3;
                     }
                     _ => {}
                 },
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
-                        *auto_scroll = false;
-                        if *scroll > 0 {
-                            *scroll -= 1;
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            if *scroll_x >= 3 { *scroll_x -= 3; } else { *scroll_x = 0; }
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
                         }
                     }
                     MouseEventKind::ScrollDown => {
-                        *scroll += 1;
-                        if *scroll + 20 >= dmesg_lines.len() {
-                            *auto_scroll = true;
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
                         }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        if *scroll_x >= 3 { *scroll_x -= 3; } else { *scroll_x = 0; }
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
                     }
                     _ => {}
                 },
