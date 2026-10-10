@@ -29,7 +29,7 @@ fn main() -> io::Result<()> {
     let mut search = String::new();
     let mut scroll_y: usize = 0;
     let mut scroll_x: usize = 0;
-    let mut port_scroll: usize = 0; // Scroll-Position für die Ports-Liste
+    let mut port_scroll: usize = 0;
     let mut auto_scroll = true;
     let mut active_filter = LogFilter::All;
 
@@ -135,8 +135,7 @@ fn get_clean_listening_ports() -> Vec<String> {
             let fields: Vec<&str> = line.split_whitespace().collect();
             if fields.len() >= 4 {
                 let local_address = fields[3];
-                result.format_push = format!("  [🟢 LISTEN]  {}", local_address);
-                result.push(format!("  [🟢 LISTEN]  {}", local_address));
+                result.push(format!("  [LISTEN]  {}", local_address));
             }
         }
     }
@@ -164,7 +163,6 @@ fn run_app<B: Backend>(
 ) -> io::Result<()> {
     loop {
         let size = terminal.size()?;
-        // Layout aufteilen: 4 Chunks (Control Panel, Dmesg List, System Info, Ports List)
         let list_height = if size.height > 20 { (size.height - 16) as usize } else { 8 };
 
         if last_refresh.elapsed() >= refresh_interval {
@@ -179,10 +177,10 @@ fn run_app<B: Backend>(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),  // 0: Control Panel
-                    Constraint::Min(8),     // 1: Dmesg List
-                    Constraint::Length(6),  // 2: System / RAM / Swap / Nets
-                    Constraint::Length(6),  // 3: Listening Ports ASCII List
+                    Constraint::Length(3),  // Control Panel
+                    Constraint::Min(8),     // Dmesg List
+                    Constraint::Length(6),  // System / RAM / Swap / Nets
+                    Constraint::Length(6),  // Ports List
                 ])
                 .split(f.size());
 
@@ -284,7 +282,7 @@ fn run_app<B: Backend>(
                 chunks[2],
             );
 
-            // 4. Listening Ports als saubere ASCII-Liste (steuerbar via Ctrl + Up/Down)
+            // 4. Listening Ports ASCII Liste (Ctrl + Up/Down scrollbar)
             let ports_vec = get_clean_listening_ports();
             let ports_items: Vec<ListItem> = ports_vec
                 .iter()
@@ -305,7 +303,6 @@ fn run_app<B: Backend>(
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(k) => match (k.modifiers, k.code) {
-                    // Port-Scrollen mit Ctrl + Up / Down
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
                         if *port_scroll > 0 {
                             *port_scroll -= 1;
@@ -314,7 +311,6 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Down) => {
                         *port_scroll += 1;
                     }
-                    // Normale Tasten ohne Modifiers
                     (_, KeyCode::Char('q')) => break,
                     (_, KeyCode::Char('r')) => {
                         update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
