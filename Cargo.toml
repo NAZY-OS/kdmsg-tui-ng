@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 ratatui = "0.24"
 crossterm = { version = "0.27", features = ["events"] }
+sysinfo = "0.32"
