@@ -167,8 +167,10 @@ fn get_default_gateway() -> String {
     if let Ok(out) = Command::new("ip").args(["route", "show", "default"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
         for part in output_str.split_whitespace() {
-            if part.parse::<std::net::IpAddr>().is_ok() {
-                return part.to_string();
+            if let Ok(addr) = part.parse::<std::net::IpAddr>() {
+                if addr.is_ipv4() {
+                    return addr.to_string();
+                }
             }
         }
     }
@@ -177,7 +179,8 @@ fn get_default_gateway() -> String {
 
 fn get_clean_listening_ports() -> Vec<String> {
     let mut result = Vec::new();
-    if let Ok(out) = Command::new("ss").args(["-tln"]).output() {
+    // Nur IPv4 (-4) anzeigen
+    if let Ok(out) = Command::new("ss").args(["-4", "-tln"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
         for line in output_str.lines().skip(1) {
             let fields: Vec<&str> = line.split_whitespace().collect();
@@ -189,7 +192,7 @@ fn get_clean_listening_ports() -> Vec<String> {
     }
     
     if result.is_empty() {
-        vec!["  No listening ports found".to_string()]
+        vec!["  No listening IPv4 ports found".to_string()]
     } else {
         result
     }
@@ -376,8 +379,14 @@ fn run_app<B: Backend>(
 
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
-                    let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.addr.to_string()).collect();
-                    let ip_str = if ips.is_empty() { "No IP".to_string() } else { ips.join(", ") };
+                    // Nur IPv4-Adressen filtern
+                    let ips: Vec<String> = data.ip_networks()
+                        .iter()
+                        .filter(|ip| ip.addr.is_ipv4())
+                        .map(|ip| ip.addr.to_string())
+                        .collect();
+                    
+                    let ip_str = if ips.is_empty() { "No IPv4".to_string() } else { ips.join(", ") };
                     
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
@@ -391,7 +400,7 @@ fn run_app<B: Backend>(
                 };
 
                 let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway: {}\n{}",
+                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
                     distro,
                     boot_time_str,
                     uptime_str,
@@ -403,7 +412,7 @@ fn run_app<B: Backend>(
 
                 f.render_widget(
                     Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Network Dashboard").style(Style::default().fg(Color::Cyan))
+                        Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[2],
                 );
@@ -419,7 +428,7 @@ fn run_app<B: Backend>(
                     List::new(ports_items).block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(format!("Listening Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                            .title(format!("Listening IPv4 Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
                             .style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[3],
