@@ -6,7 +6,10 @@ use crossterm::{
 use ratatui::{prelude::*, widgets::*};
 use regex::Regex;
 use std::io;
+use std::fs;
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 use sysinfo::{Networks, System};
 
@@ -17,6 +20,16 @@ enum LogFilter {
     Info,
     Err,
     Notice,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum LogSource {
+    Dmesg,
+    Journalctl,
+}
+
+enum Message {
+    LogsUpdated(Vec<String>),
 }
 
 fn main() -> io::Result<()> {
@@ -34,14 +47,18 @@ fn main() -> io::Result<()> {
     let mut auto_scroll = true;
     let mut show_info_panel = true;
     let mut active_filter = LogFilter::All;
+    let mut log_source = LogSource::Dmesg;
+    let mut export_status: Option<String> = None;
+
+    let (tx, rx): (Sender<Message>, Receiver<Message>) = mpsc::channel();
+
+    spawn_log_fetcher(tx.clone(), log_source);
 
     let mut sys = System::new_all();
     let mut nets = Networks::new_with_refreshed_list();
 
     let mut last_refresh = Instant::now();
-    let refresh_interval = Duration::from_secs(2);
-
-    update_dmesg_buffer(&mut dmesg_lines, &mut scroll_y, auto_scroll, 12);
+    let refresh_interval = Duration::from_secs(3);
 
     let res = run_app(
         &mut terminal,
@@ -53,6 +70,10 @@ fn main() -> io::Result<()> {
         &mut auto_scroll,
         &mut show_info_panel,
         &mut active_filter,
+        &mut log_source,
+        &mut export_status,
+        &tx,
+        &rx,
         &mut sys,
         &mut nets,
         &mut last_refresh,
@@ -70,27 +91,31 @@ fn main() -> io::Result<()> {
     res
 }
 
-fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll_y: &mut usize, auto_scroll: bool, page_size: usize) {
-    if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
-        let raw_output = String::from_utf8_lossy(&out.stdout);
-        let year_regex = Regex::new(r" \d{4}\]").unwrap();
-
-        let new_lines: Vec<String> = raw_output
-            .lines()
-            .map(|s| year_regex.replace(s, "]").to_string())
-            .collect();
-        
-        let old_len = dmesg_lines.len();
-        *dmesg_lines = new_lines;
-
-        if auto_scroll && dmesg_lines.len() > old_len {
-            if dmesg_lines.len() > page_size {
-                *scroll_y = dmesg_lines.len() - page_size;
-            } else {
-                *scroll_y = 0;
+fn spawn_log_fetcher(tx: Sender<Message>, source: LogSource) {
+    thread::spawn(move || {
+        let lines = match source {
+            LogSource::Dmesg => {
+                if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    let year_regex = Regex::new(r" \d{4}\]").unwrap();
+                    raw.lines()
+                        .map(|s| year_regex.replace(s, "]").to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
             }
-        }
-    }
+            LogSource::Journalctl => {
+                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short-iso", "-n", "2000"]).output() {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    raw.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+        let _ = tx.send(Message::LogsUpdated(lines));
+    });
 }
 
 fn render_bar(current: u64, total: u64, width: usize) -> String {
@@ -180,6 +205,10 @@ fn run_app<B: Backend>(
     auto_scroll: &mut bool,
     show_info_panel: &mut bool,
     active_filter: &mut LogFilter,
+    log_source: &mut LogSource,
+    export_status: &mut Option<String>,
+    tx: &Sender<Message>,
+    rx: &Receiver<Message>,
     sys: &mut System,
     nets: &mut Networks,
     last_refresh: &mut Instant,
@@ -189,8 +218,19 @@ fn run_app<B: Backend>(
     let gateway_ip = get_default_gateway();
 
     loop {
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                Message::LogsUpdated(new_lines) => {
+                    let old_len = dmesg_lines.len();
+                    *dmesg_lines = new_lines;
+                    if *auto_scroll && dmesg_lines.len() > old_len {
+                        *scroll_y = dmesg_lines.len().saturating_sub(1);
+                    }
+                }
+            }
+        }
+
         let size = terminal.size()?;
-        // Etwas reduziertere Höhe für dmesg, damit unten mehr Platz für saubere Netzwerk-Infos entsteht
         let list_height = if *show_info_panel {
             if size.height > 24 { (size.height - 18) as usize } else { 6 }
         } else {
@@ -198,7 +238,7 @@ fn run_app<B: Backend>(
         };
 
         if last_refresh.elapsed() >= refresh_interval {
-            update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+            spawn_log_fetcher(tx.clone(), *log_source);
             *last_refresh = Instant::now();
         }
 
@@ -210,10 +250,10 @@ fn run_app<B: Backend>(
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),  // Control Panel
-                        Constraint::Min(6),     // Dmesg List (mit weniger Zeilen)
-                        Constraint::Length(7),  // System & Net Info (erweitert)
-                        Constraint::Length(5),  // Ports List
+                        Constraint::Length(3),
+                        Constraint::Min(6),
+                        Constraint::Length(7),
+                        Constraint::Length(5),
                     ])
                     .split(f.size())
             } else {
@@ -227,6 +267,10 @@ fn run_app<B: Backend>(
             };
 
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
+            let source_str = match log_source {
+                LogSource::Dmesg => "dmesg",
+                LogSource::Journalctl => "journalctl",
+            };
             let filter_str = match active_filter {
                 LogFilter::All => "ALL",
                 LogFilter::Warn => "WARN (F2)",
@@ -235,8 +279,8 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [Ctrl+h]info",
-                search, filter_str, auto_status
+                "Source: {} | Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+j]source [Ctrl+s]export [Ctrl+h]info",
+                source_str, search, filter_str, auto_status
             );
             f.render_widget(
                 Paragraph::new(top_text)
@@ -298,11 +342,17 @@ fn run_app<B: Backend>(
                 })
                 .collect();
             
+            let title_suffix = if let Some(ref msg) = export_status {
+                format!(" | {} ", msg)
+            } else {
+                "".to_string()
+            };
+
             f.render_widget(
                 List::new(display_items).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("dmesg (Current Boot - Shown: {}/{})", filtered_lines.len(), dmesg_lines.len()))
+                        .title(format!("Logs ({}) - Shown: {}/{}{}", source_str, filtered_lines.len(), dmesg_lines.len(), title_suffix))
                         .style(Style::default().fg(Color::Cyan))
                 ),
                 chunks[1],
@@ -324,7 +374,6 @@ fn run_app<B: Backend>(
                 let used_swap = sys.used_swap();
                 let swap_bar = render_bar(used_swap, total_swap, 15);
 
-                // Erweiterte Netzwerk-Übersicht im modernen TUI-Stil mit orangefarbener Bandbreite
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
                     let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.addr.to_string()).collect();
@@ -333,7 +382,6 @@ fn run_app<B: Backend>(
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
                     
-                    // Saubere Formatierung der Netzwerkschnittstelle
                     net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb, up_kb));
                 }
                 let net_display = if net_info_lines.is_empty() {
@@ -385,13 +433,32 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                         *auto_scroll = true;
-                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, 12);
+                        spawn_log_fetcher(tx.clone(), *log_source);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
+                        *log_source = match *log_source {
+                            LogSource::Dmesg => LogSource::Journalctl,
+                            LogSource::Journalctl => LogSource::Dmesg,
+                        };
+                        spawn_log_fetcher(tx.clone(), *log_source);
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                         *auto_scroll = !*auto_scroll;
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
                         *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                        let filtered_lines: Vec<String> = dmesg_lines
+                            .iter()
+                            .filter(|l| l.contains(&*search))
+                            .cloned()
+                            .collect();
+                        if fs::write("kdmsg_export.txt", filtered_lines.join("\n")).is_ok() {
+                            *export_status = Some("[Exported!]".to_string());
+                        } else {
+                            *export_status = Some("[Export Failed!]".to_string());
+                        }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
                         if *port_scroll > 0 { *port_scroll -= 1; }
