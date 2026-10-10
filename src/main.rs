@@ -138,11 +138,9 @@ fn get_exact_boot_time() -> String {
     "Unknown".to_string()
 }
 
-/// Ermittelt die Standard-Gateway-IP über den Befehl `ip route`
 fn get_default_gateway() -> String {
     if let Ok(out) = Command::new("ip").args(["route", "show", "default"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
-        // Beispiel-Ausgabe: "default via 192.168.1.1 dev eth0 proto dhcp..."
         for part in output_str.split_whitespace() {
             if part.parse::<std::net::IpAddr>().is_ok() {
                 return part.to_string();
@@ -213,7 +211,7 @@ fn run_app<B: Backend>(
                     .constraints([
                         Constraint::Length(3),
                         Constraint::Min(6),
-                        Constraint::Length(6), // Etwas mehr Platz für IP & Gateway
+                        Constraint::Length(6),
                         Constraint::Length(5),
                     ])
                     .split(f.size())
@@ -227,7 +225,6 @@ fn run_app<B: Backend>(
                     .split(f.size())
             };
 
-            // 1. Steuerungsleiste
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let filter_str = match active_filter {
                 LogFilter::All => "ALL",
@@ -248,7 +245,6 @@ fn run_app<B: Backend>(
 
             let search_regex = Regex::new(search).ok();
 
-            // 2. Dmesg Liste
             let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
                 .filter(|l| {
@@ -311,7 +307,6 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            // 3. & 4. Info-Panel mit IP, Gateway und orangefarbener Bandbreite für alle Interfaces
             if *show_info_panel && chunks.len() > 3 {
                 let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
                 let os_ver = System::os_version().unwrap_or_default();
@@ -328,8 +323,183 @@ fn run_app<B: Backend>(
                 let used_swap = sys.used_swap();
                 let swap_bar = render_bar(used_swap, total_swap, 15);
 
-                // Alle Netzwerkschnittstellen mit IPs sammeln
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
                     let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.ip.to_string()).collect();
                     let ip_str = if ips.is_empty() { "No IP".to_string() } else { ips.join(", ") };
+                    
+                    let down_kb = data.received() / 1024;
+                    let up_kb = data.transmitted() / 1024;
+                    
+                    net_info_lines.push(format!("{}: IP: {} | ↓{} KB/s ↑{} KB/s", name, ip_str, down_kb, up_kb));
+                }
+                let net_display = if net_info_lines.is_empty() {
+                    "No networks found".to_string()
+                } else {
+                    net_info_lines.join("\n")
+                };
+
+                let sys_info_text = format!(
+                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nGateway: {}\nNetworks:\n{}",
+                    distro,
+                    boot_time_str,
+                    uptime_str,
+                    ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
+                    swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
+                    gateway_ip,
+                    net_display
+                );
+
+                f.render_widget(
+                    Paragraph::new(sys_info_text).block(
+                        Block::default().borders(Borders::ALL).title("System, IP & Network Status").style(Style::default().fg(Color::Cyan))
+                    ),
+                    chunks[2],
+                );
+
+                let ports_vec = get_clean_listening_ports();
+                let ports_items: Vec<ListItem> = ports_vec
+                    .iter()
+                    .skip(*port_scroll)
+                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
+                    .collect();
+
+                f.render_widget(
+                    List::new(ports_items).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Listening Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                            .style(Style::default().fg(Color::Cyan))
+                    ),
+                    chunks[3],
+                );
+            }
+        })?;
+
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(k) => match (k.modifiers, k.code) {
+                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
+                    (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                        *auto_scroll = true;
+                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                        *auto_scroll = !*auto_scroll;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                        *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Up) => {
+                        if *port_scroll > 0 { *port_scroll -= 1; }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Down) => {
+                        *port_scroll += 1;
+                    }
+                    (KeyModifiers::NONE, KeyCode::Tab) => {
+                        *auto_scroll = false;
+                        if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
+                            let low = l.to_lowercase();
+                            low.contains("warn") || low.contains("err") || low.contains("fail")
+                        }) {
+                            *scroll_y = pos.0;
+                        }
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 {
+                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
+                                let low = l.to_lowercase();
+                                low.contains("warn") || low.contains("err") || low.contains("fail")
+                            }) {
+                                *scroll_y = pos.0;
+                            }
+                        }
+                    }
+                    (_, KeyCode::F(2)) => {
+                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(3)) => {
+                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(4)) => {
+                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(6)) => {
+                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Char(c)) => {
+                        search.push(c);
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Backspace) => {
+                        search.pop();
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Up) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 { *scroll_y -= 1; }
+                    }
+                    (_, KeyCode::Down) => {
+                        *scroll_y += 1;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::PageUp) => {
+                        *auto_scroll = false;
+                        *scroll_y = scroll_y.saturating_sub(list_height);
+                    }
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
