@@ -111,15 +111,21 @@ fn format_uptime(seconds: u64) -> String {
     }
 }
 
-fn get_boot_time_string(uptime_seconds: u64) -> String {
-    if let Ok(duration_since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        let current_epoch = duration_since_epoch.as_secs();
-        if current_epoch >= uptime_seconds {
-            let boot_epoch = current_epoch - uptime_seconds;
-            if let Ok(out) = Command::new("date").args(["-d", &format!("@{}", boot_epoch), "+%Y-%m-%d %H:%M:%S"]).output() {
-                let time_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !time_str.is_empty() {
-                    return time_str;
+/// Liest die exakte Boot-Zeit direkt aus /proc/stat (btime = boot time in unix epoch) und formatiert sie
+fn get_exact_boot_time() -> String {
+    if let Ok(content) = std::fs::read_to_string("/proc/stat") {
+        for line in content.lines() {
+            if line.starts_with("btime ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() == 2 {
+                    if let Ok(epoch) = parts[1].parse::<u64>() {
+                        if let Ok(out) = Command::new("date").args(["-d", &format!("@{}", epoch), "+%Y-%m-%d %H:%M:%S"]).output() {
+                            let time_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            if !time_str.is_empty() {
+                                return time_str;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -161,6 +167,9 @@ fn run_app<B: Backend>(
     last_refresh: &mut Instant,
     refresh_interval: Duration,
 ) -> io::Result<()> {
+    // Einmalig beim Start die echte Boot-Zeit ermitteln
+    let boot_time_str = get_exact_boot_time();
+
     loop {
         let size = terminal.size()?;
         let list_height = if size.height > 20 { (size.height - 16) as usize } else { 8 };
@@ -249,7 +258,6 @@ fn run_app<B: Backend>(
             
             let up_secs = System::uptime();
             let uptime_str = format_uptime(up_secs);
-            let boot_time_str = get_boot_time_string(up_secs);
             
             let total_ram = sys.total_memory();
             let used_ram = sys.used_memory();
@@ -266,7 +274,7 @@ fn run_app<B: Backend>(
                 .join(" | ");
 
             let sys_info_text = format!(
-                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}",
+                "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}",
                 distro,
                 boot_time_str,
                 uptime_str,
@@ -282,7 +290,7 @@ fn run_app<B: Backend>(
                 chunks[2],
             );
 
-            // 4. Listening Ports ASCII Liste (Ctrl + Up/Down scrollbar)
+            // 4. Listening Ports ASCII Liste
             let ports_vec = get_clean_listening_ports();
             let ports_items: Vec<ListItem> = ports_vec
                 .iter()
