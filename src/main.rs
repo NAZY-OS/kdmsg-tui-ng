@@ -25,7 +25,7 @@ fn main() -> io::Result<()> {
     let mut nets = Networks::new_with_refreshed_list();
 
     let mut last_refresh = Instant::now();
-    let refresh_interval = Duration::from_secs(2); // Aktualisiert alle 2 Sekunden
+    let refresh_interval = Duration::from_secs(2);
 
     let res = run_app(
         &mut terminal,
@@ -50,7 +50,6 @@ fn main() -> io::Result<()> {
 }
 
 fn load_dmesg(dmesg_lines: &mut Vec<String>) {
-    // -k zeigt nur Kernel-Meldungen des aktuellen Boots
     if let Ok(out) = Command::new("dmesg").arg("-k").output() {
         *dmesg_lines = String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -70,7 +69,6 @@ fn run_app<B: Backend>(
     refresh_interval: Duration,
 ) -> io::Result<()> {
     loop {
-        // Auto-Rotate / Hintergrund-Aktualisierung
         if last_refresh.elapsed() >= refresh_interval {
             load_dmesg(dmesg_lines);
             *last_refresh = Instant::now();
@@ -89,14 +87,12 @@ fn run_app<B: Backend>(
                 ])
                 .split(f.size());
 
-            // 1. Suchleiste
             f.render_widget(
                 Paragraph::new(format!("Search: {} | q=quit | Auto-Rotate active", search))
                     .block(Block::default().borders(Borders::ALL).title("Filter")),
                 chunks[0],
             );
 
-            // 2. Dmesg Liste (nur aktueller Boot)
             let filtered: Vec<ListItem> = dmesg_lines
                 .iter()
                 .filter(|l| l.contains(&*search))
@@ -114,7 +110,6 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            // 3. System- & Netzwerk-Infos
             let net_str: String = nets
                 .iter()
                 .map(|(n, i)| format!("{} rx/tx {}/{}", n, i.received(), i.transmitted()))
@@ -141,7 +136,6 @@ fn run_app<B: Backend>(
             );
         })?;
 
-        // Event-Polling mit kurzer Wartezeit, damit das UI flüssig bleibt
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(k) => match k.code {
@@ -176,7 +170,6 @@ fn run_app<B: Backend>(
                     _ => {}
                 },
                 _ => {}
-alt             _ => {}
             }
         }
     }
