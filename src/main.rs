@@ -29,6 +29,7 @@ fn main() -> io::Result<()> {
     let mut search = String::new();
     let mut scroll_y: usize = 0;
     let mut scroll_x: usize = 0;
+    let mut port_scroll: usize = 0; // Scroll-Position für die Ports-Liste
     let mut auto_scroll = true;
     let mut active_filter = LogFilter::All;
 
@@ -46,6 +47,7 @@ fn main() -> io::Result<()> {
         &mut search,
         &mut scroll_y,
         &mut scroll_x,
+        &mut port_scroll,
         &mut auto_scroll,
         &mut active_filter,
         &mut sys,
@@ -125,23 +127,22 @@ fn get_boot_time_string(uptime_seconds: u64) -> String {
     "Unknown".to_string()
 }
 
-/// Holt eine saubere, übersichtliche Liste von Listening Ports über das Tool 'ss'
 fn get_clean_listening_ports() -> Vec<String> {
     let mut result = Vec::new();
-    // Nutzt den 'ss' Befehl (Standard auf modernen Linux-Systemen für TCP-Listen-Sockets)
     if let Ok(out) = Command::new("ss").args(["-tln"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
-        for line in output_str.lines().skip(1) { // Header überspringen
+        for line in output_str.lines().skip(1) {
             let fields: Vec<&str> = line.split_whitespace().collect();
             if fields.len() >= 4 {
-                let local_address = fields[3]; // Enthält z.B. 0.0.0.0:22 oder [::]:80
-                result.push(format!("🟢 LISTEN : {}", local_address));
+                let local_address = fields[3];
+                result.format_push = format!("  [🟢 LISTEN]  {}", local_address);
+                result.push(format!("  [🟢 LISTEN]  {}", local_address));
             }
         }
     }
     
     if result.is_empty() {
-        vec!["No listening ports found (or 'ss' command missing)".to_string()]
+        vec!["  No listening ports found".to_string()]
     } else {
         result
     }
@@ -153,6 +154,7 @@ fn run_app<B: Backend>(
     search: &mut String,
     scroll_y: &mut usize,
     scroll_x: &mut usize,
+    port_scroll: &mut usize,
     auto_scroll: &mut bool,
     active_filter: &mut LogFilter,
     sys: &mut System,
@@ -162,7 +164,8 @@ fn run_app<B: Backend>(
 ) -> io::Result<()> {
     loop {
         let size = terminal.size()?;
-        let list_height = if size.height > 16 { (size.height - 14) as usize } else { 10 };
+        // Layout aufteilen: 4 Chunks (Control Panel, Dmesg List, System Info, Ports List)
+        let list_height = if size.height > 20 { (size.height - 16) as usize } else { 8 };
 
         if last_refresh.elapsed() >= refresh_interval {
             update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
@@ -176,9 +179,10 @@ fn run_app<B: Backend>(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(list_height as u16 + 2),
-                    Constraint::Length(12),
+                    Constraint::Length(3),  // 0: Control Panel
+                    Constraint::Min(8),     // 1: Dmesg List
+                    Constraint::Length(6),  // 2: System / RAM / Swap / Nets
+                    Constraint::Length(6),  // 3: Listening Ports ASCII List
                 ])
                 .split(f.size());
 
@@ -192,7 +196,7 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [F2-F6]filter [PgUp/PgDn/←/→]scroll",
+                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [Ctrl+↑/↓]ports",
                 search, filter_str, auto_status
             );
             f.render_widget(
@@ -240,7 +244,7 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            // 3. System- & Hardware-Infos inklusive strukturierter Ports via `ss`
+            // 3. System-, RAM/Swap & Networks
             let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
             let os_ver = System::os_version().unwrap_or_default();
             let distro = format!("{} {}", os_name, os_ver);
@@ -263,76 +267,97 @@ fn run_app<B: Backend>(
                 .collect::<Vec<_>>()
                 .join(" | ");
 
-            let ports_vec = get_clean_listening_ports();
-            let ports_display = ports_vec.iter().take(3).cloned().collect::<Vec<String>>().join("  |  ");
-
-            let info = format!(
-                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}\nListening Ports:\n{}",
+            let sys_info_text = format!(
+                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}",
                 distro,
                 boot_time_str,
                 uptime_str,
                 ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
                 swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
-                if net_str.is_empty() { "No active interfaces".to_string() } else { net_str },
-                ports_display
+                if net_str.is_empty() { "No active interfaces".to_string() } else { net_str }
             );
 
             f.render_widget(
-                Paragraph::new(info).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("System, RAM/Swap & Ports")
+                Paragraph::new(sys_info_text).block(
+                    Block::default().borders(Borders::ALL).title("System & Hardware Status")
                 ),
                 chunks[2],
+            );
+
+            // 4. Listening Ports als saubere ASCII-Liste (steuerbar via Ctrl + Up/Down)
+            let ports_vec = get_clean_listening_ports();
+            let ports_items: Vec<ListItem> = ports_vec
+                .iter()
+                .skip(*port_scroll)
+                .map(|p| ListItem::new(p.as_str()))
+                .collect();
+
+            f.render_widget(
+                List::new(ports_items).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!("Listening Ports (Scroll: Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                ),
+                chunks[3],
             );
         })?;
 
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
-                Event::Key(k) => match k.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('r') => {
+                Event::Key(k) => match (k.modifiers, k.code) {
+                    // Port-Scrollen mit Ctrl + Up / Down
+                    (KeyModifiers::CONTROL, KeyCode::Up) => {
+                        if *port_scroll > 0 {
+                            *port_scroll -= 1;
+                        }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Down) => {
+                        *port_scroll += 1;
+                    }
+                    // Normale Tasten ohne Modifiers
+                    (_, KeyCode::Char('q')) => break,
+                    (_, KeyCode::Char('r')) => {
                         update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
                     }
-                    KeyCode::F(2) => {
+                    (_, KeyCode::F(2)) => {
                         *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
                         *scroll_y = 0;
                     }
-                    KeyCode::F(3) => {
+                    (_, KeyCode::F(3)) => {
                         *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
                         *scroll_y = 0;
                     }
-                    KeyCode::F(4) => {
+                    (_, KeyCode::F(4)) => {
                         *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
                         *scroll_y = 0;
                     }
-                    KeyCode::F(6) => {
+                    (_, KeyCode::F(6)) => {
                         *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
                         *scroll_y = 0;
                     }
-                    KeyCode::Char(c) => {
+                    (_, KeyCode::Char(c)) => {
                         search.push(c);
                         *scroll_y = 0;
                         *auto_scroll = false;
                     }
-                    KeyCode::Backspace => {
+                    (_, KeyCode::Backspace) => {
                         search.pop();
                         *scroll_y = 0;
                         *auto_scroll = false;
                     }
-                    KeyCode::Up => {
+                    (_, KeyCode::Up) => {
                         *auto_scroll = false;
                         if *scroll_y > 0 {
                             *scroll_y -= 1;
                         }
                     }
-                    KeyCode::Down => {
+                    (_, KeyCode::Down) => {
                         *scroll_y += 1;
                         if *scroll_y + list_height >= dmesg_lines.len() {
                             *auto_scroll = true;
                         }
                     }
-                    KeyCode::PageUp => {
+                    (_, KeyCode::PageUp) => {
                         *auto_scroll = false;
                         if *scroll_y >= list_height {
                             *scroll_y -= list_height;
@@ -340,19 +365,19 @@ fn run_app<B: Backend>(
                             *scroll_y = 0;
                         }
                     }
-                    KeyCode::PageDown => {
+                    (_, KeyCode::PageDown) => {
                         *scroll_y += list_height;
                         if *scroll_y + list_height >= dmesg_lines.len() {
                             *scroll_y = dmesg_lines.len().saturating_sub(list_height);
                             *auto_scroll = true;
                         }
                     }
-                    KeyCode::Left => {
+                    (_, KeyCode::Left) => {
                         if *scroll_x > 0 {
                             *scroll_x -= 3;
                         }
                     }
-                    KeyCode::Right => {
+                    (_, KeyCode::Right) => {
                         *scroll_x += 3;
                     }
                     _ => {}
