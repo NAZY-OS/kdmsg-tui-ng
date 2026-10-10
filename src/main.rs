@@ -4,6 +4,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
+use regex::Regex;
 use std::io;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -31,6 +32,7 @@ fn main() -> io::Result<()> {
     let mut scroll_x: usize = 0;
     let mut port_scroll: usize = 0;
     let mut auto_scroll = true;
+    let mut show_info_panel = true;
     let mut active_filter = LogFilter::All;
 
     let mut sys = System::new_all();
@@ -49,6 +51,7 @@ fn main() -> io::Result<()> {
         &mut scroll_x,
         &mut port_scroll,
         &mut auto_scroll,
+        &mut show_info_panel,
         &mut active_filter,
         &mut sys,
         &mut nets,
@@ -67,11 +70,19 @@ fn main() -> io::Result<()> {
     res
 }
 
+/// Lädt dmesg, entfernt das Jahr aus dem Zeitstempel und behält das Auto-Scroll bei
 fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll_y: &mut usize, auto_scroll: bool, page_size: usize) {
     if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
-        let new_lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        let raw_output = String::from_utf8_lossy(&out.stdout);
+        // Regex um das Jahr (z.B. " 2026 ") aus dem dmesg -T Zeitstempel zu entfernen
+        let year_regex = Regex::new(r" \d{4}\]").unwrap();
+
+        let new_lines: Vec<String> = raw_output
             .lines()
-            .map(|s| s.to_string())
+            .map(|s| {
+                // Ersetzt z. B. " 2026]" durch "]"
+                year_regex.replace(s, "]").to_string()
+            })
             .collect();
         
         let old_len = dmesg_lines.len();
@@ -111,7 +122,6 @@ fn format_uptime(seconds: u64) -> String {
     }
 }
 
-/// Liest die exakte Boot-Zeit direkt aus /proc/stat (btime = boot time in unix epoch) und formatiert sie
 fn get_exact_boot_time() -> String {
     if let Ok(content) = std::fs::read_to_string("/proc/stat") {
         for line in content.lines() {
@@ -161,19 +171,25 @@ fn run_app<B: Backend>(
     scroll_x: &mut usize,
     port_scroll: &mut usize,
     auto_scroll: &mut bool,
+    show_info_panel: &mut bool,
     active_filter: &mut LogFilter,
     sys: &mut System,
     nets: &mut Networks,
     last_refresh: &mut Instant,
     refresh_interval: Duration,
 ) -> io::Result<()> {
-    // Einmalig beim Start die echte Boot-Zeit ermitteln
     let boot_time_str = get_exact_boot_time();
 
     loop {
         let size = terminal.size()?;
-        let list_height = if size.height > 20 { (size.height - 16) as usize } else { 8 };
+        // Dynamische Layout-Höhe abhängig davon ob das Info-Panel sichtbar ist
+        let list_height = if *show_info_panel {
+            if size.height > 20 { (size.height - 16) as usize } else { 8 }
+        } else {
+            (size.height.saturating_sub(6)) as usize
+        };
 
+        // Kontinuierliches Auto-Rotate im Hintergrund
         if last_refresh.elapsed() >= refresh_interval {
             update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
             *last_refresh = Instant::now();
@@ -183,15 +199,25 @@ fn run_app<B: Backend>(
         nets.refresh();
 
         terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),  // Control Panel
-                    Constraint::Min(8),     // Dmesg List
-                    Constraint::Length(6),  // System / RAM / Swap / Nets
-                    Constraint::Length(6),  // Ports List
-                ])
-                .split(f.size());
+            let chunks = if *show_info_panel {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),  // Control Panel
+                        Constraint::Min(6),     // Dmesg List
+                        Constraint::Length(5),  // System Info
+                        Constraint::Length(5),  // Ports List
+                    ])
+                    .split(f.size())
+            } else {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),  // Control Panel
+                        Constraint::Min(6),     // Dmesg List
+                    ])
+                    .split(f.size())
+            };
 
             // 1. Steuerungsleiste
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
@@ -203,20 +229,28 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [Ctrl+↑/↓]ports",
+                "Search(RegEx): {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [F1]info",
                 search, filter_str, auto_status
             );
             f.render_widget(
                 Paragraph::new(top_text)
-                    .block(Block::default().borders(Borders::ALL).title("Control Panel")),
+                    .block(Block::default().borders(Borders::ALL).title("Control Panel").style(Style::default().fg(Color::Cyan))),
                 chunks[0],
             );
 
-            // 2. Dmesg Liste
+            // Reguläre Ausdruck (Regex) Kompilierung für die Suche
+            let search_regex = Regex::new(search).ok();
+
+            // 2. Dmesg Liste mit Filtern, Regex und farblicher Hervorhebung
             let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
                 .filter(|l| {
-                    let matches_search = l.contains(&*search);
+                    let matches_search = if let Some(ref reg) = search_regex {
+                        reg.is_match(l)
+                    } else {
+                        l.contains(&*search)
+                    };
+
                     let matches_filter = match active_filter {
                         LogFilter::All => true,
                         LogFilter::Warn => l.to_lowercase().contains("warn"),
@@ -238,7 +272,20 @@ fn run_app<B: Backend>(
                     } else {
                         ""
                     };
-                    ListItem::new(truncated)
+
+                    // Farbliche Hervorhebung je nach Log-Typ
+                    let lower = l.to_lowercase();
+                    let color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") {
+                        Color::Red
+                    } else if lower.contains("warn") {
+                        Color::Yellow
+                    } else if lower.contains("info") {
+                        Color::Cyan
+                    } else {
+                        Color::Green
+                    };
+
+                    ListItem::new(truncated).style(Style::default().fg(color))
                 })
                 .collect();
             
@@ -247,81 +294,113 @@ fn run_app<B: Backend>(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(format!("dmesg (Current Boot - Shown: {}/{})", filtered_lines.len(), dmesg_lines.len()))
+                        .style(Style::default().fg(Color::White))
                 ),
                 chunks[1],
             );
 
-            // 3. System-, RAM/Swap & Networks
-            let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
-            let os_ver = System::os_version().unwrap_or_default();
-            let distro = format!("{} {}", os_name, os_ver);
-            
-            let up_secs = System::uptime();
-            let uptime_str = format_uptime(up_secs);
-            
-            let total_ram = sys.total_memory();
-            let used_ram = sys.used_memory();
-            let ram_bar = render_bar(used_ram, total_ram, 15);
+            // 3. & 4. Info-Panel (falls aktiv)
+            if *show_info_panel && chunks.len() > 3 {
+                let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
+                let os_ver = System::os_version().unwrap_or_default();
+                let distro = format!("{} {}", os_name, os_ver);
+                
+                let up_secs = System::uptime();
+                let uptime_str = format_uptime(up_secs);
+                
+                let total_ram = sys.total_memory();
+                let used_ram = sys.used_memory();
+                let ram_bar = render_bar(used_ram, total_ram, 15);
 
-            let total_swap = sys.total_swap();
-            let used_swap = sys.used_swap();
-            let swap_bar = render_bar(used_swap, total_swap, 15);
+                let total_swap = sys.total_swap();
+                let used_swap = sys.used_swap();
+                let swap_bar = render_bar(used_swap, total_swap, 15);
 
-            let net_str: String = nets
-                .iter()
-                .map(|(n, i)| format!("{}: ↓{} ↑{}", n, i.received(), i.transmitted()))
-                .collect::<Vec<_>>()
-                .join(" | ");
+                let net_str: String = nets
+                    .iter()
+                    .map(|(n, i)| format!("{}: ↓{} ↑{}", n, i.received(), i.transmitted()))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
 
-            let sys_info_text = format!(
-                "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}",
-                distro,
-                boot_time_str,
-                uptime_str,
-                ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
-                swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
-                if net_str.is_empty() { "No active interfaces".to_string() } else { net_str }
-            );
+                let sys_info_text = format!(
+                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}",
+                    distro,
+                    boot_time_str,
+                    uptime_str,
+                    ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
+                    swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
+                    if net_str.is_empty() { "No active interfaces".to_string() } else { net_str }
+                );
 
-            f.render_widget(
-                Paragraph::new(sys_info_text).block(
-                    Block::default().borders(Borders::ALL).title("System & Hardware Status")
-                ),
-                chunks[2],
-            );
+                f.render_widget(
+                    Paragraph::new(sys_info_text).block(
+                        Block::default().borders(Borders::ALL).title("System & Hardware Status").style(Style::default().fg(Color::Magenta))
+                    ),
+                    chunks[2],
+                );
 
-            // 4. Listening Ports ASCII Liste
-            let ports_vec = get_clean_listening_ports();
-            let ports_items: Vec<ListItem> = ports_vec
-                .iter()
-                .skip(*port_scroll)
-                .map(|p| ListItem::new(p.as_str()))
-                .collect();
+                let ports_vec = get_clean_listening_ports();
+                let ports_items: Vec<ListItem> = ports_vec
+                    .iter()
+                    .skip(*port_scroll)
+                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightBlue)))
+                    .collect();
 
-            f.render_widget(
-                List::new(ports_items).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!("Listening Ports (Scroll: Ctrl+↑/↓ - Total: {})", ports_vec.len()))
-                ),
-                chunks[3],
-            );
+                f.render_widget(
+                    List::new(ports_items).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Listening Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                            .style(Style::default().fg(Color::Magenta))
+                    ),
+                    chunks[3],
+                );
+            }
         })?;
 
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(k) => match (k.modifiers, k.code) {
+                    // Strg-Kombinationen
+                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
+                    (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                        *auto_scroll = !*auto_scroll;
+                    }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
-                        if *port_scroll > 0 {
-                            *port_scroll -= 1;
-                        }
+                        if *port_scroll > 0 { *port_scroll -= 1; }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Down) => {
                         *port_scroll += 1;
                     }
-                    (_, KeyCode::Char('q')) => break,
-                    (_, KeyCode::Char('r')) => {
-                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+                    // Tab & Shift+Tab zum Springen zu Warn/Err
+                    (KeyModifiers::NONE, KeyCode::Tab) => {
+                        *auto_scroll = false;
+                        // Nächste Warnung oder Fehler finden
+                        if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
+                            let low = l.to_lowercase();
+                            low.contains("warn") || low.contains("err") || low.contains("fail")
+                        }) {
+                            *scroll_y = pos.0;
+                        }
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
+                        *auto_scroll = false;
+                        // Vorherige Warnung oder Fehler finden
+                        if *scroll_y > 0 {
+                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
+                                let low = l.to_lowercase();
+                                low.contains("warn") || low.contains("err") || low.contains("fail")
+                            }) {
+                                *scroll_y = pos.0;
+                            }
+                        }
+                    }
+                    // F-Tasten & Toggles
+                    (_, KeyCode::F(1)) => {
+                        *show_info_panel = !*show_info_panel;
                     }
                     (_, KeyCode::F(2)) => {
                         *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
@@ -339,6 +418,7 @@ fn run_app<B: Backend>(
                         *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
                         *scroll_y = 0;
                     }
+                    // Textsuche & Eingabe
                     (_, KeyCode::Char(c)) => {
                         search.push(c);
                         *scroll_y = 0;
@@ -349,11 +429,10 @@ fn run_app<B: Backend>(
                         *scroll_y = 0;
                         *auto_scroll = false;
                     }
+                    // Navigation
                     (_, KeyCode::Up) => {
                         *auto_scroll = false;
-                        if *scroll_y > 0 {
-                            *scroll_y -= 1;
-                        }
+                        if *scroll_y > 0 { *scroll_y -= 1; }
                     }
                     (_, KeyCode::Down) => {
                         *scroll_y += 1;
@@ -363,11 +442,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::PageUp) => {
                         *auto_scroll = false;
-                        if *scroll_y >= list_height {
-                            *scroll_y -= list_height;
-                        } else {
-                            *scroll_y = 0;
-                        }
+                        *scroll_y = scroll_y.saturating_sub(list_height);
                     }
                     (_, KeyCode::PageDown) => {
                         *scroll_y += list_height;
@@ -377,9 +452,7 @@ fn run_app<B: Backend>(
                         }
                     }
                     (_, KeyCode::Left) => {
-                        if *scroll_x > 0 {
-                            *scroll_x -= 3;
-                        }
+                        *scroll_x = scroll_x.saturating_sub(3);
                     }
                     (_, KeyCode::Right) => {
                         *scroll_x += 3;
@@ -389,7 +462,7 @@ fn run_app<B: Backend>(
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         if m.modifiers.contains(KeyModifiers::ALT) {
-                            if *scroll_x >= 3 { *scroll_x -= 3; } else { *scroll_x = 0; }
+                            *scroll_x = scroll_x.saturating_sub(3);
                         } else {
                             *auto_scroll = false;
                             if *scroll_y > 0 { *scroll_y -= 1; }
@@ -406,7 +479,7 @@ fn run_app<B: Backend>(
                         }
                     }
                     MouseEventKind::ScrollLeft => {
-                        if *scroll_x >= 3 { *scroll_x -= 3; } else { *scroll_x = 0; }
+                        *scroll_x = scroll_x.saturating_sub(3);
                     }
                     MouseEventKind::ScrollRight => {
                         *scroll_x += 3;
