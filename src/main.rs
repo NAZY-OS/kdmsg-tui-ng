@@ -70,19 +70,14 @@ fn main() -> io::Result<()> {
     res
 }
 
-/// Lädt dmesg, entfernt das Jahr aus dem Zeitstempel und behält das Auto-Scroll bei
 fn update_dmesg_buffer(dmesg_lines: &mut Vec<String>, scroll_y: &mut usize, auto_scroll: bool, page_size: usize) {
     if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
         let raw_output = String::from_utf8_lossy(&out.stdout);
-        // Regex um das Jahr (z.B. " 2026 ") aus dem dmesg -T Zeitstempel zu entfernen
         let year_regex = Regex::new(r" \d{4}\]").unwrap();
 
         let new_lines: Vec<String> = raw_output
             .lines()
-            .map(|s| {
-                // Ersetzt z. B. " 2026]" durch "]"
-                year_regex.replace(s, "]").to_string()
-            })
+            .map(|s| year_regex.replace(s, "]").to_string())
             .collect();
         
         let old_len = dmesg_lines.len();
@@ -182,14 +177,12 @@ fn run_app<B: Backend>(
 
     loop {
         let size = terminal.size()?;
-        // Dynamische Layout-Höhe abhängig davon ob das Info-Panel sichtbar ist
         let list_height = if *show_info_panel {
             if size.height > 20 { (size.height - 16) as usize } else { 8 }
         } else {
             (size.height.saturating_sub(6)) as usize
         };
 
-        // Kontinuierliches Auto-Rotate im Hintergrund
         if last_refresh.elapsed() >= refresh_interval {
             update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
             *last_refresh = Instant::now();
@@ -203,18 +196,18 @@ fn run_app<B: Backend>(
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),  // Control Panel
-                        Constraint::Min(6),     // Dmesg List
-                        Constraint::Length(5),  // System Info
-                        Constraint::Length(5),  // Ports List
+                        Constraint::Length(3),
+                        Constraint::Min(6),
+                        Constraint::Length(5),
+                        Constraint::Length(5),
                     ])
                     .split(f.size())
             } else {
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),  // Control Panel
-                        Constraint::Min(6),     // Dmesg List
+                        Constraint::Length(3),
+                        Constraint::Min(6),
                     ])
                     .split(f.size())
             };
@@ -229,7 +222,7 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search(RegEx): {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [F1]info",
+                "Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [Ctrl+h]info",
                 search, filter_str, auto_status
             );
             f.render_widget(
@@ -238,10 +231,9 @@ fn run_app<B: Backend>(
                 chunks[0],
             );
 
-            // Reguläre Ausdruck (Regex) Kompilierung für die Suche
             let search_regex = Regex::new(search).ok();
 
-            // 2. Dmesg Liste mit Filtern, Regex und farblicher Hervorhebung
+            // 2. Dmesg Liste mit Neo Blue Look & Schwarz-Grün Akzenten für Warn/Err
             let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
                 .filter(|l| {
@@ -273,19 +265,16 @@ fn run_app<B: Backend>(
                         ""
                     };
 
-                    // Farbliche Hervorhebung je nach Log-Typ
                     let lower = l.to_lowercase();
-                    let color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") {
-                        Color::Red
+                    let (fg_color, bg_color) = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") {
+                        (Color::Red, Color::Black)
                     } else if lower.contains("warn") {
-                        Color::Yellow
-                    } else if lower.contains("info") {
-                        Color::Cyan
+                        (Color::Yellow, Color::Black)
                     } else {
-                        Color::Green
+                        (Color::Green, Color::Black) // Neo Blue / Schwarz-Grün Look
                     };
 
-                    ListItem::new(truncated).style(Style::default().fg(color))
+                    ListItem::new(truncated).style(Style::default().fg(fg_color).bg(bg_color))
                 })
                 .collect();
             
@@ -294,12 +283,12 @@ fn run_app<B: Backend>(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(format!("dmesg (Current Boot - Shown: {}/{})", filtered_lines.len(), dmesg_lines.len()))
-                        .style(Style::default().fg(Color::White))
+                        .style(Style::default().fg(Color::Cyan))
                 ),
                 chunks[1],
             );
 
-            // 3. & 4. Info-Panel (falls aktiv)
+            // 3. & 4. Info-Panel (Neo Blue Stil)
             if *show_info_panel && chunks.len() > 3 {
                 let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
                 let os_ver = System::os_version().unwrap_or_default();
@@ -334,7 +323,7 @@ fn run_app<B: Backend>(
 
                 f.render_widget(
                     Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Hardware Status").style(Style::default().fg(Color::Magenta))
+                        Block::default().borders(Borders::ALL).title("System & Hardware Status").style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[2],
                 );
@@ -343,7 +332,7 @@ fn run_app<B: Backend>(
                 let ports_items: Vec<ListItem> = ports_vec
                     .iter()
                     .skip(*port_scroll)
-                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightBlue)))
+                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
                     .collect();
 
                 f.render_widget(
@@ -351,7 +340,7 @@ fn run_app<B: Backend>(
                         Block::default()
                             .borders(Borders::ALL)
                             .title(format!("Listening Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
-                            .style(Style::default().fg(Color::Magenta))
+                            .style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[3],
                 );
@@ -361,7 +350,6 @@ fn run_app<B: Backend>(
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(k) => match (k.modifiers, k.code) {
-                    // Strg-Kombinationen
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                         update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
@@ -369,16 +357,17 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                         *auto_scroll = !*auto_scroll;
                     }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                        *show_info_panel = !*show_info_panel;
+                    }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
                         if *port_scroll > 0 { *port_scroll -= 1; }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Down) => {
                         *port_scroll += 1;
                     }
-                    // Tab & Shift+Tab zum Springen zu Warn/Err
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         *auto_scroll = false;
-                        // Nächste Warnung oder Fehler finden
                         if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
                             let low = l.to_lowercase();
                             low.contains("warn") || low.contains("err") || low.contains("fail")
@@ -388,7 +377,6 @@ fn run_app<B: Backend>(
                     }
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
-                        // Vorherige Warnung oder Fehler finden
                         if *scroll_y > 0 {
                             if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
                                 let low = l.to_lowercase();
@@ -397,10 +385,6 @@ fn run_app<B: Backend>(
                                 *scroll_y = pos.0;
                             }
                         }
-                    }
-                    // F-Tasten & Toggles
-                    (_, KeyCode::F(1)) => {
-                        *show_info_panel = !*show_info_panel;
                     }
                     (_, KeyCode::F(2)) => {
                         *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
@@ -418,7 +402,6 @@ fn run_app<B: Backend>(
                         *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
                         *scroll_y = 0;
                     }
-                    // Textsuche & Eingabe
                     (_, KeyCode::Char(c)) => {
                         search.push(c);
                         *scroll_y = 0;
@@ -429,7 +412,6 @@ fn run_app<B: Backend>(
                         *scroll_y = 0;
                         *auto_scroll = false;
                     }
-                    // Navigation
                     (_, KeyCode::Up) => {
                         *auto_scroll = false;
                         if *scroll_y > 0 { *scroll_y -= 1; }
