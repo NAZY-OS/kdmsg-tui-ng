@@ -233,7 +233,7 @@ fn run_app<B: Backend>(
 
             let search_regex = Regex::new(search).ok();
 
-            // 2. Dmesg Liste mit Neo Blue Look & Schwarz-Grün Akzenten für Warn/Err
+            // 2. Dmesg Liste
             let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
                 .filter(|l| {
@@ -254,6 +254,15 @@ fn run_app<B: Backend>(
                 })
                 .collect();
 
+            // Automatisch ans Ende springen, falls Auto-Scroll aktiv ist
+            if *auto_scroll && !filtered_lines.is_empty() {
+                if filtered_lines.len() > list_height {
+                    *scroll_y = filtered_lines.len() - list_height;
+                } else {
+                    *scroll_y = 0;
+                }
+            }
+
             let display_items: Vec<ListItem> = filtered_lines
                 .iter()
                 .skip(*scroll_y)
@@ -271,7 +280,7 @@ fn run_app<B: Backend>(
                     } else if lower.contains("warn") {
                         (Color::Yellow, Color::Black)
                     } else {
-                        (Color::Green, Color::Black) // Neo Blue / Schwarz-Grün Look
+                        (Color::Green, Color::Black)
                     };
 
                     ListItem::new(truncated).style(Style::default().fg(fg_color).bg(bg_color))
@@ -288,7 +297,7 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            // 3. & 4. Info-Panel (Neo Blue Stil)
+            // 3. & 4. Info-Panel
             if *show_info_panel && chunks.len() > 3 {
                 let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
                 let os_ver = System::os_version().unwrap_or_default();
@@ -352,6 +361,8 @@ fn run_app<B: Backend>(
                 Event::Key(k) => match (k.modifiers, k.code) {
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                        // Manuelles Rotate (erzwingt Puffer-Update und springt an das Ende)
+                        *auto_scroll = true;
                         update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
@@ -388,29 +399,27 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::F(2)) => {
                         *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *scroll_y = 0;
+                        *auto_scroll = true;
                     }
                     (_, KeyCode::F(3)) => {
                         *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *scroll_y = 0;
+                        *auto_scroll = true;
                     }
                     (_, KeyCode::F(4)) => {
                         *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *scroll_y = 0;
+                        *auto_scroll = true;
                     }
                     (_, KeyCode::F(6)) => {
                         *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *scroll_y = 0;
+                        *auto_scroll = true;
                     }
                     (_, KeyCode::Char(c)) => {
                         search.push(c);
-                        *scroll_y = 0;
-                        *auto_scroll = false;
+                        *auto_scroll = true; // Bei Suche direkt zum Neuesten springen
                     }
                     (_, KeyCode::Backspace) => {
                         search.pop();
-                        *scroll_y = 0;
-                        *auto_scroll = false;
+                        *auto_scroll = true; // Bei Löschen in Suche direkt zum Neuesten springen
                     }
                     (_, KeyCode::Up) => {
                         *auto_scroll = false;
@@ -418,6 +427,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::Down) => {
                         *scroll_y += 1;
+                        // Prüfen ob am Ende angelangt, um Auto-Scroll wieder zu aktivieren
                         if *scroll_y + list_height >= dmesg_lines.len() {
                             *auto_scroll = true;
                         }
