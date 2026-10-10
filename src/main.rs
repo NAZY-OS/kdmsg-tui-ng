@@ -325,7 +325,7 @@ fn run_app<B: Backend>(
 
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
-                    let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.ip.to_string()).collect();
+                    let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.addr.to_string()).collect();
                     let ip_str = if ips.is_empty() { "No IP".to_string() } else { ips.join(", ") };
                     
                     let down_kb = data.received() / 1024;
