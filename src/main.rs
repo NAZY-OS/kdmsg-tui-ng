@@ -109,13 +109,11 @@ fn format_uptime(seconds: u64) -> String {
     }
 }
 
-/// Berechnet das exakte Startdatum und die Uhrzeit des letzten Boots
 fn get_boot_time_string(uptime_seconds: u64) -> String {
     if let Ok(duration_since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         let current_epoch = duration_since_epoch.as_secs();
         if current_epoch >= uptime_seconds {
             let boot_epoch = current_epoch - uptime_seconds;
-            // Einfache Umrechnung von Epoch in lesbares Datum/Zeit via Standard-Befehl 'date' (zuverlässig auf Linux)
             if let Ok(out) = Command::new("date").args(["-d", &format!("@{}", boot_epoch), "+%Y-%m-%d %H:%M:%S"]).output() {
                 let time_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !time_str.is_empty() {
@@ -125,6 +123,28 @@ fn get_boot_time_string(uptime_seconds: u64) -> String {
         }
     }
     "Unknown".to_string()
+}
+
+/// Holt eine saubere, übersichtliche Liste von Listening Ports über das Tool 'ss'
+fn get_clean_listening_ports() -> Vec<String> {
+    let mut result = Vec::new();
+    // Nutzt den 'ss' Befehl (Standard auf modernen Linux-Systemen für TCP-Listen-Sockets)
+    if let Ok(out) = Command::new("ss").args(["-tln"]).output() {
+        let output_str = String::from_utf8_lossy(&out.stdout);
+        for line in output_str.lines().skip(1) { // Header überspringen
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 4 {
+                let local_address = fields[3]; // Enthält z.B. 0.0.0.0:22 oder [::]:80
+                result.push(format!("🟢 LISTEN : {}", local_address));
+            }
+        }
+    }
+    
+    if result.is_empty() {
+        vec!["No listening ports found (or 'ss' command missing)".to_string()]
+    } else {
+        result
+    }
 }
 
 fn run_app<B: Backend>(
@@ -158,11 +178,11 @@ fn run_app<B: Backend>(
                 .constraints([
                     Constraint::Length(3),
                     Constraint::Min(list_height as u16 + 2),
-                    Constraint::Length(11),
+                    Constraint::Length(12),
                 ])
                 .split(f.size());
 
-            // 1. Steuerungsleiste mit Shortcuts
+            // 1. Steuerungsleiste
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let filter_str = match active_filter {
                 LogFilter::All => "ALL",
@@ -172,7 +192,7 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [F2-F6]filter [←/→]h-scroll",
+                "Search: {} | Filter: {} | Auto: {} | [q]uit [r]otate [F2-F6]filter [PgUp/PgDn/←/→]scroll",
                 search, filter_str, auto_status
             );
             f.render_widget(
@@ -220,7 +240,7 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            // 3. System- & Hardware-Infos inklusive Start-Datum & Uptime
+            // 3. System- & Hardware-Infos inklusive strukturierter Ports via `ss`
             let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
             let os_ver = System::os_version().unwrap_or_default();
             let distro = format!("{} {}", os_name, os_ver);
@@ -243,18 +263,18 @@ fn run_app<B: Backend>(
                 .collect::<Vec<_>>()
                 .join(" | ");
 
-            let ports = std::fs::read_to_string("/proc/net/tcp").unwrap_or_default();
-            let listen_ports: Vec<&str> = ports.lines().skip(1).take(3).collect();
+            let ports_vec = get_clean_listening_ports();
+            let ports_display = ports_vec.iter().take(3).cloned().collect::<Vec<String>>().join("  |  ");
 
             let info = format!(
-                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}\nPorts (Listen):\n{}",
+                "OS: {} | Boot: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nNets: {}\nListening Ports:\n{}",
                 distro,
                 boot_time_str,
                 uptime_str,
                 ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
                 swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
                 if net_str.is_empty() { "No active interfaces".to_string() } else { net_str },
-                if listen_ports.is_empty() { "None".to_string() } else { listen_ports.join("\n") }
+                ports_display
             );
 
             f.render_widget(
@@ -309,6 +329,21 @@ fn run_app<B: Backend>(
                     KeyCode::Down => {
                         *scroll_y += 1;
                         if *scroll_y + list_height >= dmesg_lines.len() {
+                            *auto_scroll = true;
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        *auto_scroll = false;
+                        if *scroll_y >= list_height {
+                            *scroll_y -= list_height;
+                        } else {
+                            *scroll_y = 0;
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        *scroll_y += list_height;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
                             *auto_scroll = true;
                         }
                     }
