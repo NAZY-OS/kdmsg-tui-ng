@@ -1,0 +1,16 @@
+[Unit]
+Description=KDMSG TUI Service on TTY 11
+After=systemd-user-sessions.service network.target
+
+[Service]
+ExecStart=/sbin/kdmsg-tui-ng
+Restart=always
+RestartSec=1
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty11
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
