@@ -41,7 +41,7 @@ fn main() -> io::Result<()> {
     let mut last_refresh = Instant::now();
     let refresh_interval = Duration::from_secs(2);
 
-    update_dmesg_buffer(&mut dmesg_lines, &mut scroll_y, auto_scroll, 20);
+    update_dmesg_buffer(&mut dmesg_lines, &mut scroll_y, auto_scroll, 12);
 
     let res = run_app(
         &mut terminal,
@@ -190,8 +190,9 @@ fn run_app<B: Backend>(
 
     loop {
         let size = terminal.size()?;
+        // Etwas reduziertere Höhe für dmesg, damit unten mehr Platz für saubere Netzwerk-Infos entsteht
         let list_height = if *show_info_panel {
-            if size.height > 20 { (size.height - 16) as usize } else { 8 }
+            if size.height > 24 { (size.height - 18) as usize } else { 6 }
         } else {
             (size.height.saturating_sub(6)) as usize
         };
@@ -209,10 +210,10 @@ fn run_app<B: Backend>(
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),
-                        Constraint::Min(6),
-                        Constraint::Length(6),
-                        Constraint::Length(5),
+                        Constraint::Length(3),  // Control Panel
+                        Constraint::Min(6),     // Dmesg List (mit weniger Zeilen)
+                        Constraint::Length(7),  // System & Net Info (erweitert)
+                        Constraint::Length(5),  // Ports List
                     ])
                     .split(f.size())
             } else {
@@ -323,6 +324,7 @@ fn run_app<B: Backend>(
                 let used_swap = sys.used_swap();
                 let swap_bar = render_bar(used_swap, total_swap, 15);
 
+                // Erweiterte Netzwerk-Übersicht im modernen TUI-Stil mit orangefarbener Bandbreite
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
                     let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.addr.to_string()).collect();
@@ -331,16 +333,17 @@ fn run_app<B: Backend>(
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
                     
-                    net_info_lines.push(format!("{}: IP: {} | ↓{} KB/s ↑{} KB/s", name, ip_str, down_kb, up_kb));
+                    // Saubere Formatierung der Netzwerkschnittstelle
+                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb, up_kb));
                 }
                 let net_display = if net_info_lines.is_empty() {
-                    "No networks found".to_string()
+                    "  No networks found".to_string()
                 } else {
                     net_info_lines.join("\n")
                 };
 
                 let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB\nSwap: {} ({}/{}) MB\nGateway: {}\nNetworks:\n{}",
+                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway: {}\n{}",
                     distro,
                     boot_time_str,
                     uptime_str,
@@ -352,7 +355,7 @@ fn run_app<B: Backend>(
 
                 f.render_widget(
                     Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System, IP & Network Status").style(Style::default().fg(Color::Cyan))
+                        Block::default().borders(Borders::ALL).title("System & Network Dashboard").style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[2],
                 );
@@ -382,7 +385,7 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                         *auto_scroll = true;
-                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+                        update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, 12);
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                         *auto_scroll = !*auto_scroll;
