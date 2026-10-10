@@ -24,9 +24,8 @@ fn main() -> io::Result<()> {
     let mut sys = System::new_all();
     let mut nets = Networks::new_with_refreshed_list();
 
-    // Timer für automatisches Aktualisieren (Rotieren) von dmesg
     let mut last_refresh = Instant::now();
-    let refresh_interval = Duration::from_secs(3); // Alle 3 Sekunden aktualisieren
+    let refresh_interval = Duration::from_secs(2); // Aktualisiert alle 2 Sekunden
 
     let res = run_app(
         &mut terminal,
@@ -51,8 +50,8 @@ fn main() -> io::Result<()> {
 }
 
 fn load_dmesg(dmesg_lines: &mut Vec<String>) {
-    if let Ok(out) = Command::new("dmesg").arg("-T").output() {
-        // -T aktiviert lesbare Zeitstempel (menschlich lesbare Zeit)
+    // -k zeigt nur Kernel-Meldungen des aktuellen Boots
+    if let Ok(out) = Command::new("dmesg").arg("-k").output() {
         *dmesg_lines = String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(|s| s.to_string())
@@ -71,7 +70,7 @@ fn run_app<B: Backend>(
     refresh_interval: Duration,
 ) -> io::Result<()> {
     loop {
-        // Automatisch dmesg und System-Infos rotieren/aktualisieren
+        // Auto-Rotate / Hintergrund-Aktualisierung
         if last_refresh.elapsed() >= refresh_interval {
             load_dmesg(dmesg_lines);
             *last_refresh = Instant::now();
@@ -92,12 +91,12 @@ fn run_app<B: Backend>(
 
             // 1. Suchleiste
             f.render_widget(
-                Paragraph::new(format!("Search: {} | q=quit | Auto-refresh active", search))
+                Paragraph::new(format!("Search: {} | q=quit | Auto-Rotate active", search))
                     .block(Block::default().borders(Borders::ALL).title("Filter")),
                 chunks[0],
             );
 
-            // 2. Dmesg Liste mit Zeitstempeln
+            // 2. Dmesg Liste (nur aktueller Boot)
             let filtered: Vec<ListItem> = dmesg_lines
                 .iter()
                 .filter(|l| l.contains(&*search))
@@ -110,7 +109,7 @@ fn run_app<B: Backend>(
                 List::new(filtered).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("dmesg mit Zeitstempeln (Total: {})", dmesg_lines.len()))
+                        .title(format!("dmesg (Current Boot - Total: {})", dmesg_lines.len()))
                 ),
                 chunks[1],
             );
@@ -142,7 +141,8 @@ fn run_app<B: Backend>(
             );
         })?;
 
-        if event::poll(Duration::from_millis(150))? {
+        // Event-Polling mit kurzer Wartezeit, damit das UI flüssig bleibt
+        if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(k) => match k.code {
                     KeyCode::Char('q') => break,
@@ -176,6 +176,7 @@ fn run_app<B: Backend>(
                     _ => {}
                 },
                 _ => {}
+alt             _ => {}
             }
         }
     }
