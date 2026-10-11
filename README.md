@@ -27,3 +27,6 @@
  \
  \
 ![kdmsg-tui-ng](https://github.com/NAZY-OS/kdmsg-tui-ng/blob/main/screenshot/Screenshot_RC.png)
+
+## F1 help infos
+![kdmsg-tui-ng-help](https://github.com/NAZY-OS/kdmsg-tui-ng/blob/main/screenshot/Screenshot_RC-II.png)
