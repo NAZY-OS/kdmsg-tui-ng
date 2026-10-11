@@ -465,3 +465,160 @@ fn run_app<B: Backend>(
         })?;
 
         if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(k) => match (k.modifiers, k.code) {
+                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
+                    (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
+                        *auto_scroll = true;
+                        spawn_log_fetcher(tx.clone(), *log_source);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
+                        *log_source = match *log_source {
+                            LogSource::Dmesg => LogSource::Journalctl,
+                            LogSource::Journalctl => LogSource::Dmesg,
+                        };
+                        spawn_log_fetcher(tx.clone(), *log_source);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                        *auto_scroll = !*auto_scroll;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
+                        *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
+                        *show_help_modal = !*show_help_modal;
+                    }
+                    (_, KeyCode::Esc) => {
+                        if *show_help_modal {
+                            *show_help_modal = false;
+                        }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                        let filtered_lines: Vec<String> = dmesg_lines
+                            .iter()
+                            .filter(|l| l.contains(&*search))
+                            .cloned()
+                            .collect();
+                        if fs::write("kdmsg_export.txt", filtered_lines.join("\n")).is_ok() {
+                            *export_status = Some("[Exported!]".to_string());
+                        } else {
+                            *export_status = Some("[Export Failed!]".to_string());
+                        }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Up) => {
+                        if *port_scroll > 0 { *port_scroll -= 1; }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Down) => {
+                        *port_scroll += 1;
+                    }
+                    (KeyModifiers::NONE, KeyCode::Tab) => {
+                        *auto_scroll = false;
+                        if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
+                            let low = l.to_lowercase();
+                            low.contains("warn") || low.contains("err") || low.contains("fail")
+                        }) {
+                            *scroll_y = pos.0;
+                        }
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 {
+                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
+                                let low = l.to_lowercase();
+                                low.contains("warn") || low.contains("err") || low.contains("fail")
+                            }) {
+                                *scroll_y = pos.0;
+                            }
+                        }
+                    }
+                    (_, KeyCode::F(2)) => {
+                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(3)) => {
+                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(4)) => {
+                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(5)) => {
+                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Char(c)) => {
+                        if !*show_help_modal {
+                            search.push(c);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Backspace) => {
+                        if !*show_help_modal {
+                            search.pop();
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Up) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 { *scroll_y -= 1; }
+                    }
+                    (_, KeyCode::Down) => {
+                        *scroll_y += 1;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::PageUp) => {
+                        *auto_scroll = false;
+                        *scroll_y = scroll_y.saturating_sub(list_height);
+                    }
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
