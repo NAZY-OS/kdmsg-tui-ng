@@ -1,5 +1,5 @@
 [Unit]
-Description=KDMSG TUI Diagnostic Service on TTY 11
+Description=KDMSG TUI Diagnostic Service on TTY 10
 After=systemd-user-sessions.service network.target
 Conflicts=getty@tty10.service
 Before=getty@tty10.service
