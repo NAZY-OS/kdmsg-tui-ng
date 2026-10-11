@@ -33,6 +33,7 @@ fn main() -> io::Result<()> {
     let mut port_scroll: usize = 0;
     let mut auto_scroll = true;
     let mut show_info_panel = true;
+    let mut show_help_modal = false;
     let mut active_filter = LogFilter::All;
 
     let mut sys = System::new_all();
@@ -52,6 +53,7 @@ fn main() -> io::Result<()> {
         &mut port_scroll,
         &mut auto_scroll,
         &mut show_info_panel,
+        &mut show_help_modal,
         &mut active_filter,
         &mut sys,
         &mut nets,
@@ -142,8 +144,10 @@ fn get_default_gateway() -> String {
     if let Ok(out) = Command::new("ip").args(["route", "show", "default"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
         for part in output_str.split_whitespace() {
-            if part.parse::<std::net::IpAddr>().is_ok() {
-                return part.to_string();
+            if let Ok(addr) = part.parse::<std::net::IpAddr>() {
+                if addr.is_ipv4() {
+                    return addr.to_string();
+                }
             }
         }
     }
@@ -152,7 +156,7 @@ fn get_default_gateway() -> String {
 
 fn get_clean_listening_ports() -> Vec<String> {
     let mut result = Vec::new();
-    if let Ok(out) = Command::new("ss").args(["-tln"]).output() {
+    if let Ok(out) = Command::new("ss").args(["-4", "-tln"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
         for line in output_str.lines().skip(1) {
             let fields: Vec<&str> = line.split_whitespace().collect();
@@ -164,7 +168,7 @@ fn get_clean_listening_ports() -> Vec<String> {
     }
     
     if result.is_empty() {
-        vec!["  No listening ports found".to_string()]
+        vec!["  No listening IPv4 ports found".to_string()]
     } else {
         result
     }
@@ -179,6 +183,7 @@ fn run_app<B: Backend>(
     port_scroll: &mut usize,
     auto_scroll: &mut bool,
     show_info_panel: &mut bool,
+    show_help_modal: &mut bool,
     active_filter: &mut LogFilter,
     sys: &mut System,
     nets: &mut Networks,
@@ -191,7 +196,7 @@ fn run_app<B: Backend>(
     loop {
         let size = terminal.size()?;
         let list_height = if *show_info_panel {
-            if size.height > 24 { (size.height - 18) as usize } else { 6 }
+            if size.height > 26 { (size.height - 20) as usize } else { 4 }
         } else {
             (size.height.saturating_sub(6)) as usize
         };
@@ -210,8 +215,8 @@ fn run_app<B: Backend>(
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(3),
-                        Constraint::Min(6),
-                        Constraint::Length(7),
+                        Constraint::Min(4),
+                        Constraint::Length(8),
                         Constraint::Length(5),
                     ])
                     .split(f.size())
@@ -234,7 +239,7 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [Ctrl+h]info",
+                "Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+a]uto [Ctrl+i]info [F1]help",
                 search, filter_str, auto_status
             );
             f.render_widget(
@@ -325,8 +330,12 @@ fn run_app<B: Backend>(
 
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
-                    let ips: Vec<String> = data.ip_networks().iter().map(|ip| ip.addr.to_string()).collect();
-                    let ip_str = if ips.is_empty() { "No IP".to_string() } else { ips.join(", ") };
+                    let ips: Vec<String> = data.ip_networks()
+                        .iter()
+                        .filter(|ip| ip.addr.is_ipv4())
+                        .map(|ip| ip.addr.to_string())
+                        .collect();
+                    let ip_str = if ips.is_empty() { "No IPv4".to_string() } else { ips.join(", ") };
                     
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
@@ -340,7 +349,7 @@ fn run_app<B: Backend>(
                 };
 
                 let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway: {}\n{}",
+                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
                     distro,
                     boot_time_str,
                     uptime_str,
@@ -352,7 +361,7 @@ fn run_app<B: Backend>(
 
                 f.render_widget(
                     Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Network Dashboard").style(Style::default().fg(Color::Cyan))
+                        Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[2],
                 );
@@ -368,11 +377,42 @@ fn run_app<B: Backend>(
                     List::new(ports_items).block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(format!("Listening Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                            .title(format!("Listening IPv4 Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
                             .style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[3],
                 );
+            }
+
+            // Breites Hilfe-Modal (Weißer Text auf blauem Hintergrund)
+            if *show_help_modal {
+                let area = f.size();
+                let popup_area = Rect {
+                    x: area.width / 8,
+                    y: area.height / 6,
+                    width: (area.width * 3) / 4,
+                    height: (area.height * 2) / 3,
+                };
+                let help_text = vec![
+                    Line::from("=== KDMSG-TUI-NG HOTKEYS ==="),
+                    Line::from(""),
+                    Line::from("Ctrl + q         : Quit application"),
+                    Line::from("Ctrl + r         : Refresh / Rotate logs"),
+                    Line::from("Ctrl + a         : Toggle auto-scroll"),
+                    Line::from("Ctrl + i         : Toggle info panel"),
+                    Line::from("F1 / Ctrl + h    : Toggle / Close help screen"),
+                    Line::from("Esc              : Close help screen"),
+                    Line::from("Tab / Shift+Tab  : Jump to next / previous warning/error"),
+                    Line::from("F2 / F3 / F4     : Filter presets (Warn, Info, Err)"),
+                    Line::from("Ctrl + ↑ / ↓     : Scroll listening ports"),
+                ];
+                let help_paragraph = Paragraph::new(help_text)
+                    .style(Style::default().fg(Color::White).bg(Color::Blue))
+                    .block(Block::default().borders(Borders::ALL).title(" Help & Shortcuts ").style(Style::default().fg(Color::White).bg(Color::Blue)))
+                    .alignment(Alignment::Center);
+                
+                f.render_widget(Clear, popup_area);
+                f.render_widget(help_paragraph, popup_area);
             }
         })?;
 
@@ -387,8 +427,16 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                         *auto_scroll = !*auto_scroll;
                     }
-                    (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
                         *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
+                        *show_help_modal = !*show_help_modal;
+                    }
+                    (_, KeyCode::Esc) => {
+                        if *show_help_modal {
+                            *show_help_modal = false;
+                        }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
                         if *port_scroll > 0 { *port_scroll -= 1; }
@@ -433,12 +481,16 @@ fn run_app<B: Backend>(
                         *auto_scroll = true;
                     }
                     (_, KeyCode::Char(c)) => {
-                        search.push(c);
-                        *auto_scroll = true;
+                        if !*show_help_modal {
+                            search.push(c);
+                            *auto_scroll = true;
+                        }
                     }
                     (_, KeyCode::Backspace) => {
-                        search.pop();
-                        *auto_scroll = true;
+                        if !*show_help_modal {
+                            search.pop();
+                            *auto_scroll = true;
+                        }
                     }
                     (_, KeyCode::Up) => {
                         *auto_scroll = false;
