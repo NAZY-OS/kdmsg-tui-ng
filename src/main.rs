@@ -46,6 +46,7 @@ fn main() -> io::Result<()> {
     let mut port_scroll: usize = 0;
     let mut auto_scroll = true;
     let mut show_info_panel = true;
+    let mut show_help_modal = false;
     let mut active_filter = LogFilter::All;
     let mut log_source = LogSource::Dmesg;
     let mut export_status: Option<String> = None;
@@ -69,6 +70,7 @@ fn main() -> io::Result<()> {
         &mut port_scroll,
         &mut auto_scroll,
         &mut show_info_panel,
+        &mut show_help_modal,
         &mut active_filter,
         &mut log_source,
         &mut export_status,
@@ -179,7 +181,6 @@ fn get_default_gateway() -> String {
 
 fn get_clean_listening_ports() -> Vec<String> {
     let mut result = Vec::new();
-    // Nur IPv4 (-4) anzeigen
     if let Ok(out) = Command::new("ss").args(["-4", "-tln"]).output() {
         let output_str = String::from_utf8_lossy(&out.stdout);
         for line in output_str.lines().skip(1) {
@@ -207,6 +208,7 @@ fn run_app<B: Backend>(
     port_scroll: &mut usize,
     auto_scroll: &mut bool,
     show_info_panel: &mut bool,
+    show_help_modal: &mut bool,
     active_filter: &mut LogFilter,
     log_source: &mut LogSource,
     export_status: &mut Option<String>,
@@ -234,8 +236,9 @@ fn run_app<B: Backend>(
         }
 
         let size = terminal.size()?;
+        // Nochmals 2 Zeilen weniger für dmesg (insgesamt 4 weniger als zuvor), damit unten maximal Platz ist
         let list_height = if *show_info_panel {
-            if size.height > 24 { (size.height - 18) as usize } else { 6 }
+            if size.height > 28 { (size.height - 22) as usize } else { 4 }
         } else {
             (size.height.saturating_sub(6)) as usize
         };
@@ -254,8 +257,8 @@ fn run_app<B: Backend>(
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(3),
-                        Constraint::Min(6),
-                        Constraint::Length(7),
+                        Constraint::Min(4),
+                        Constraint::Length(8),
                         Constraint::Length(5),
                     ])
                     .split(f.size())
@@ -282,7 +285,7 @@ fn run_app<B: Backend>(
                 LogFilter::Notice => "NOTICE (F6)",
             };
             let top_text = format!(
-                "Source: {} | Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+j]source [Ctrl+s]export [Ctrl+h]info",
+                "Source: {} | Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+j]source [Ctrl+s]export [F1/Ctrl+h]help",
                 source_str, search, filter_str, auto_status
             );
             f.render_widget(
@@ -379,7 +382,6 @@ fn run_app<B: Backend>(
 
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
-                    // Nur IPv4-Adressen filtern
                     let ips: Vec<String> = data.ip_networks()
                         .iter()
                         .filter(|ip| ip.addr.is_ipv4())
@@ -434,6 +436,39 @@ fn run_app<B: Backend>(
                     chunks[3],
                 );
             }
+
+            // Hilfe-Modal Overlay (Weißer Text auf blauem Hintergrund)
+            if *show_help_modal {
+                let area = f.size();
+                let popup_area = Rect {
+                    x: area.width / 4,
+                    y: area.height / 5,
+                    width: area.width / 2,
+                    height: (area.height * 3) / 5,
+                };
+                let help_text = vec![
+                    Line::from("=== KDMSG-TUI-NG HOTKEYS ==="),
+                    Line::from(""),
+                    Line::from("Ctrl + q         : Beenden (Quit)"),
+                    Line::from("Ctrl + r         : Logs neu laden (Rotate)"),
+                    Line::from("Ctrl + j         : Log-Quelle wechseln (dmesg / journalctl)"),
+                    Line::from("Ctrl + a         : Auto-Scroll ein/ausschalten"),
+                    Line::from("Ctrl + i         : Info-Panel ein/ausblenden"),
+                    Line::from("Ctrl + s         : Gefilterte Logs exportieren"),
+                    Line::from("F1 / Ctrl + h    : Hilfe-Ansicht umschalten / Schließen"),
+                    Line::from("Esc              : Hilfe-Ansicht schließen"),
+                    Line::from("Tab / Shift+Tab  : Zu nächster / vorheriger Warnung/Fehler springen"),
+                    Line::from("F2 / F3 / F4     : Filter-Presets (Warn, Info, Err)"),
+                    Line::from("Ctrl + ↑ / ↓     : Ports-Liste scrollen"),
+                ];
+                let help_paragraph = Paragraph::new(help_text)
+                    .style(Style::default().fg(Color::White).bg(Color::Blue))
+                    .block(Block::default().borders(Borders::ALL).title(" Hilfe & Shortcuts ").style(Style::default().fg(Color::White).bg(Color::Blue)))
+                    .alignment(Alignment::Center);
+                
+                f.render_widget(Clear, popup_area);
+                f.render_widget(help_paragraph, popup_area);
+            }
         })?;
 
         if event::poll(Duration::from_millis(50))? {
@@ -454,8 +489,16 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                         *auto_scroll = !*auto_scroll;
                     }
-                    (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
+                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
                         *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
+                        *show_help_modal = !*show_help_modal;
+                    }
+                    (_, KeyCode::Esc) => {
+                        if *show_help_modal {
+                            *show_help_modal = false;
+                        }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
                         let filtered_lines: Vec<String> = dmesg_lines
@@ -512,12 +555,16 @@ fn run_app<B: Backend>(
                         *auto_scroll = true;
                     }
                     (_, KeyCode::Char(c)) => {
-                        search.push(c);
-                        *auto_scroll = true;
+                        if !*show_help_modal {
+                            search.push(c);
+                            *auto_scroll = true;
+                        }
                     }
                     (_, KeyCode::Backspace) => {
-                        search.pop();
-                        *auto_scroll = true;
+                        if !*show_help_modal {
+                            search.pop();
+                            *auto_scroll = true;
+                        }
                     }
                     (_, KeyCode::Up) => {
                         *auto_scroll = false;
