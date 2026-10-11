@@ -275,26 +275,29 @@ fn run_app<B: Backend>(
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(6),
-                    Constraint::Length(7),
-                    Constraint::Length(5),
+                    Constraint::Length(3), // Control Panel
+                    Constraint::Length(3), // Dedizierte Suchleiste
+                    Constraint::Min(6),    // Logs
+                    Constraint::Length(7), // System Dashboard
+                    Constraint::Length(5), // Ports
                 ])
                 .split(terminal_size)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(6),
+                    Constraint::Length(3), // Control Panel
+                    Constraint::Length(3), // Dedizierte Suchleiste
+                    Constraint::Min(6),    // Logs
                 ])
                 .split(terminal_size)
         };
-        let list_height = current_chunks[1].height.saturating_sub(2) as usize;
+        let list_height = current_chunks[2].height.saturating_sub(2) as usize;
 
         terminal.draw(|f| {
             let chunks = current_chunks;
 
+            // 1. Control Panel
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
                 LogSource::Dmesg => "dmesg",
@@ -308,13 +311,27 @@ fn run_app<B: Backend>(
             let all_label = if *active_filter == LogFilter::All { "[ALL]" } else { "All" };
 
             let top_text = format!(
-                "Source: {} | Filters: {} {} {} {} {} | Auto: {}\nSearch: {} | [Ctrl+q]uit [Ctrl+j]source [Ctrl+s]export [F1]help",
-                source_str, all_label, f2_label, f3_label, f4_label, f5_label, auto_status, search
+                "Source: {} | Filters: {} {} {} {} {} | Auto: {} | [Ctrl+q]uit [Ctrl+j]source [Ctrl+s]export [F1]help",
+                source_str, all_label, f2_label, f3_label, f4_label, f5_label, auto_status
             );
             f.render_widget(
                 Paragraph::new(top_text)
                     .block(Block::default().borders(Borders::ALL).title("Control Panel").style(Style::default().fg(Color::Cyan))),
                 chunks[0],
+            );
+
+            // 2. Dedizierte farbliche Suchleiste
+            let search_display = if search.is_empty() {
+                "Type to search logs...".to_string()
+            } else {
+                search.clone()
+            };
+            let search_color = if search.is_empty() { Color::DarkGray } else { Color::Yellow };
+            f.render_widget(
+                Paragraph::new(search_display)
+                    .style(Style::default().fg(search_color))
+                    .block(Block::default().borders(Borders::ALL).title(" Search Filter ").style(Style::default().fg(Color::LightYellow))),
+                chunks[1],
             );
 
             let search_pattern = if search.is_empty() {
@@ -411,6 +428,7 @@ fn run_app<B: Backend>(
                 "".to_string()
             };
 
+            // 3. Log-Ansicht (Index 2)
             f.render_widget(
                 List::new(display_items).block(
                     Block::default()
@@ -418,9 +436,10 @@ fn run_app<B: Backend>(
                         .title(format!("Logs ({}) - Shown: {}/{}{}", source_str, filtered_lines.len(), dmesg_lines.len(), title_suffix))
                         .style(Style::default().fg(Color::Cyan))
                 ),
-                chunks[1],
+                chunks[2],
             );
 
+            // 4. System Dashboard & 5. Ports (falls Info-Panel aktiv)
             if *show_info_panel && chunks.len() > 3 {
                 let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
                 let os_ver = System::os_version().unwrap_or_default();
@@ -472,7 +491,7 @@ fn run_app<B: Backend>(
                     Paragraph::new(sys_info_text).block(
                         Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
                     ),
-                    chunks[2],
+                    chunks[3],
                 );
 
                 let ports_vec = get_clean_listening_ports();
@@ -489,7 +508,7 @@ fn run_app<B: Backend>(
                             .title(format!("Listening IPv4 Ports with Process/PID (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
                             .style(Style::default().fg(Color::Cyan))
                     ),
-                    chunks[3],
+                    chunks[4],
                 );
             }
 
@@ -549,6 +568,8 @@ fn run_app<B: Backend>(
                     (_, KeyCode::Esc) => {
                         if *show_help_modal {
                             *show_help_modal = false;
+                        } else {
+                            search.clear();
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
@@ -591,102 +612,4 @@ fn run_app<B: Backend>(
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
                         if *scroll_y > 0 {
-                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
-                                let low = l.to_lowercase();
-                                low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
-                            }) {
-                                *scroll_y = pos.0;
-                            }
-                        }
-                    }
-                    (_, KeyCode::F(2)) => {
-                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(3)) => {
-                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(4)) => {
-                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(5)) => {
-                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        if !*show_help_modal {
-                            search.push(c);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Backspace) => {
-                        if !*show_help_modal {
-                            search.pop();
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Up) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 { *scroll_y -= 1; }
-                    }
-                    (_, KeyCode::Down) => {
-                        *scroll_y += 1;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::PageUp) => {
-                        *auto_scroll = false;
-                        *scroll_y = scroll_y.saturating_sub(list_height);
-                    }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*
