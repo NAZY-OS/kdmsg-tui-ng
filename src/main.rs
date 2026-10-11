@@ -299,7 +299,6 @@ fn run_app<B: Backend>(
                         LogFilter::All => true,
                         LogFilter::Warn => {
                             let low = l.to_lowercase();
-                            // Großzügigerer Warn-Filter für maximale Trefferquote
                             low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
                             || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
                             || low.contains("slow") || low.contains("unk") || low.contains("sched") || low.contains("bug")
@@ -345,15 +344,20 @@ fn run_app<B: Backend>(
                     };
 
                     let lower = l.to_lowercase();
-                    let (fg_color, bg_color) = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("oops") {
-                        (Color::Red, Color::Black)
-                    } else if lower.contains("warn") || lower.contains("bad") || lower.contains("bug") {
-                        (Color::Yellow, Color::Black)
+                    // Intelligente Farb-Logik basierend auf Log-Prioritäten und Mustern
+                    let fg_color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("error") || lower.contains("fault") || lower.contains("segfault") || lower.contains("oops") || lower.contains("denied") {
+                        Color::Red
+                    } else if lower.contains("warn") || lower.contains("warning") || lower.contains("bad") || lower.contains("degraded") || lower.contains("slow") || lower.contains("bug") {
+                        Color::Yellow
+                    } else if lower.contains("info") || lower.contains("usb") || lower.contains("pci") || lower.contains("cpu") || lower.contains("acpi") || lower.contains("net") || lower.contains("registered") {
+                        Color::Cyan
+                    } else if lower.contains("notice") || lower.contains("note") || lower.contains("ready") || lower.contains("started") || lower.contains("version") || lower.contains("boot") || lower.contains("mount") {
+                        Color::Magenta
                     } else {
-                        (Color::Green, Color::Black)
+                        Color::Green
                     };
 
-                    ListItem::new(truncated).style(Style::default().fg(fg_color).bg(bg_color))
+                    ListItem::new(truncated).style(Style::default().fg(fg_color).bg(Color::Black))
                 })
                 .collect();
             
