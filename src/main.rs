@@ -276,9 +276,9 @@ fn run_app<B: Backend>(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(3), // Control Panel
-                    Constraint::Length(3), // Dedizierte Suchleiste
+                    Constraint::Length(3), // Search Bar
                     Constraint::Min(6),    // Logs
-                    Constraint::Length(7), // System Dashboard
+                    Constraint::Length(7), // Dashboard
                     Constraint::Length(5), // Ports
                 ])
                 .split(terminal_size)
@@ -287,7 +287,7 @@ fn run_app<B: Backend>(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(3), // Control Panel
-                    Constraint::Length(3), // Dedizierte Suchleiste
+                    Constraint::Length(3), // Search Bar
                     Constraint::Min(6),    // Logs
                 ])
                 .split(terminal_size)
@@ -297,7 +297,6 @@ fn run_app<B: Backend>(
         terminal.draw(|f| {
             let chunks = current_chunks;
 
-            // 1. Control Panel
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
                 LogSource::Dmesg => "dmesg",
@@ -320,7 +319,6 @@ fn run_app<B: Backend>(
                 chunks[0],
             );
 
-            // 2. Dedizierte farbliche Suchleiste
             let search_display = if search.is_empty() {
                 "Type to search logs...".to_string()
             } else {
@@ -428,7 +426,6 @@ fn run_app<B: Backend>(
                 "".to_string()
             };
 
-            // 3. Log-Ansicht (Index 2)
             f.render_widget(
                 List::new(display_items).block(
                     Block::default()
@@ -439,7 +436,6 @@ fn run_app<B: Backend>(
                 chunks[2],
             );
 
-            // 4. System Dashboard & 5. Ports (falls Info-Panel aktiv)
             if *show_info_panel && chunks.len() > 3 {
                 let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
                 let os_ver = System::os_version().unwrap_or_default();
@@ -612,4 +608,102 @@ fn run_app<B: Backend>(
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
                         if *scroll_y > 0 {
-                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*
+                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
+                                let low = l.to_lowercase();
+                                low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
+                            }) {
+                                *scroll_y = pos.0;
+                            }
+                        }
+                    }
+                    (_, KeyCode::F(2)) => {
+                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(3)) => {
+                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(4)) => {
+                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(5)) => {
+                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Char(c)) => {
+                        if !*show_help_modal {
+                            search.push(c);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Backspace) => {
+                        if !*show_help_modal {
+                            search.pop();
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Up) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 { *scroll_y -= 1; }
+                    }
+                    (_, KeyCode::Down) => {
+                        *scroll_y += 1;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::PageUp) => {
+                        *auto_scroll = false;
+                        *scroll_y = scroll_y.saturating_sub(list_height);
+                    }
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
