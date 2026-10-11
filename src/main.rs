@@ -97,7 +97,6 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                // Hier wurde -k entfernt, damit absolut alle dmesg-Einträge geladen werden
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     let year_regex = Regex::new(r" \d{4}\]").unwrap();
@@ -276,20 +275,20 @@ fn run_app<B: Backend>(
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3), // Control Panel
-                    Constraint::Length(3), // Search Bar
-                    Constraint::Min(6),    // Logs
-                    Constraint::Length(7), // Dashboard
-                    Constraint::Length(5), // Ports
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Min(6),
+                    Constraint::Length(7),
+                    Constraint::Length(5),
                 ])
                 .split(terminal_size)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3), // Control Panel
-                    Constraint::Length(3), // Search Bar
-                    Constraint::Min(6),    // Logs
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Min(6),
                 ])
                 .split(terminal_size)
         };
@@ -572,7 +571,14 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
                         let filtered_lines: Vec<String> = dmesg_lines
                             .iter()
-                            .filter(|l| l.contains(&*search))
+                            .filter(|l| {
+                                let matches_search = if search.is_empty() {
+                                    true
+                                } else {
+                                    l.to_lowercase().contains(&search.to_lowercase())
+                                };
+                                matches_search
+                            })
                             .cloned()
                             .collect();
                         
@@ -655,3 +661,56 @@ fn run_app<B: Backend>(
                             *auto_scroll = true;
                         }
                     }
+                    (_, KeyCode::PageUp) => {
+                        *auto_scroll = false;
+                        *scroll_y = scroll_y.saturating_sub(list_height);
+                    }
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        if *scroll_y + list_height >= dmesg_lines.len() {
+                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
