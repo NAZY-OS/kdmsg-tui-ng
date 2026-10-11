@@ -367,13 +367,6 @@ fn run_app<B: Backend>(
                 );
 
                 let ports_vec = get_clean_listening_ports();
-                let ports_items: ListItemList = ports_vec
-                    .iter()
-                    .skip(*port_scroll)
-                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
-                    .collect(); // korrigiert zu standard ListItem collection
-
-                // (Fix im Widget-Block unten übernommen)
                 f.render_widget(
                     List::new(
                         ports_vec
@@ -391,7 +384,6 @@ fn run_app<B: Backend>(
                 );
             }
 
-            // Schöneres, professionell gestaltetes Hilfe-Modal (F1 / Ctrl + h)
             if *show_help_modal {
                 let area = f.size();
                 let popup_area = Rect {
@@ -576,4 +568,31 @@ fn run_app<B: Backend>(
                             *scroll_x = scroll_x.saturating_sub(3);
                         } else {
                             *auto_scroll = false;
-                            if *scroll_y >
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            if *scroll_y + list_height >= dmesg_lines.len() {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
