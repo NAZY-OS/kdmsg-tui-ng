@@ -194,15 +194,8 @@ fn run_app<B: Backend>(
     let gateway_ip = get_default_gateway();
 
     loop {
-        let size = terminal.size()?;
-        let list_height = if *show_info_panel {
-            if size.height > 26 { (size.height - 20) as usize } else { 4 }
-        } else {
-            (size.height.saturating_sub(6)) as usize
-        };
-
         if last_refresh.elapsed() >= refresh_interval {
-            update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
+            update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, 12);
             *last_refresh = Instant::now();
         }
 
@@ -210,14 +203,15 @@ fn run_app<B: Backend>(
         nets.refresh();
 
         terminal.draw(|f| {
+            // Vollständig dynamische Aufteilung: Logs nehmen den gesamten verbleibenden Platz ein (Min(0))
             let chunks = if *show_info_panel {
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),
-                        Constraint::Min(4),
-                        Constraint::Length(8),
-                        Constraint::Length(5),
+                        Constraint::Length(3), // Control Panel oben
+                        Constraint::Min(0),    // Log-Bereich (dynamisch)
+                        Constraint::Length(7), // System & Network Dashboard
+                        Constraint::Length(5), // Listening Ports unten
                     ])
                     .split(f.size())
             } else {
@@ -225,10 +219,12 @@ fn run_app<B: Backend>(
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(3),
-                        Constraint::Min(6),
+                        Constraint::Min(0),
                     ])
                     .split(f.size())
             };
+
+            let list_height = chunks[1].height.saturating_sub(2) as usize;
 
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let filter_str = match active_filter {
@@ -384,6 +380,7 @@ fn run_app<B: Backend>(
                 );
             }
 
+            // Gleichmäßig ausgerichtetes Hilfe-Modal mit sauberen Tabulatoren/Spalten
             if *show_help_modal {
                 let area = f.size();
                 let popup_area = Rect {
@@ -394,48 +391,48 @@ fn run_app<B: Backend>(
                 };
 
                 let help_lines = vec![
-                    Line::from(Span::styled("═══════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
-                    Line::from(Span::styled("                   KDMSG-TUI-NG HELP & SHORTCUTS           ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-                    Line::from(Span::styled("═══════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
+                    Line::from(Span::styled("══════════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
+                    Line::from(Span::styled("                     KDMSG-TUI-NG HELP & SHORTCUTS            ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+                    Line::from(Span::styled("══════════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
                     Line::from(""),
                     Line::from(vec![
                         Span::styled("  Ctrl + q         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Quit application cleanly"),
+                        Span::raw("│ Quit application cleanly"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Ctrl + r         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Force refresh / rotate log buffer"),
+                        Span::raw("│ Force refresh / rotate log buffer"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Ctrl + a         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Toggle auto-scrolling mode"),
+                        Span::raw("│ Toggle auto-scrolling mode"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Ctrl + i         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Toggle system & network info panel"),
+                        Span::raw("│ Toggle system & network info panel"),
                     ]),
                     Line::from(vec![
                         Span::styled("  F1 / Ctrl + h    ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Open / Close this help overlay"),
+                        Span::raw("│ Open / Close this help overlay"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Esc              ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Close help overlay / Clear search"),
+                        Span::raw("│ Close help overlay / Clear search"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Tab / Shift+Tab  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Jump to next / previous warning or error"),
+                        Span::raw("│ Jump to next / previous warning or error"),
                     ]),
                     Line::from(vec![
                         Span::styled("  F2 / F3 / F4     ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Quick filter presets (Warn, Info, Err)"),
+                        Span::raw("│ Quick filter presets (Warn, Info, Err)"),
                     ]),
                     Line::from(vec![
                         Span::styled("  Ctrl + ↑ / ↓     ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw(": Scroll through listening ports list"),
+                        Span::raw("│ Scroll through listening ports list"),
                     ]),
                     Line::from(""),
-                    Line::from(Span::styled(" Press [F1], [Ctrl+h] or [Esc] to close this window ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::ITALIC))),
+                    Line::from(Span::styled("  Press [F1], [Ctrl+h] or [Esc] to close this window  ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::ITALIC))),
                 ];
 
                 let help_paragraph = Paragraph::new(help_lines)
@@ -460,6 +457,13 @@ fn run_app<B: Backend>(
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
                     (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
                         *auto_scroll = true;
+                        let size = terminal.size()?;
+                        let chunks = if *show_info_panel {
+                            Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(7), Constraint::Length(5)]).split(size)
+                        } else {
+                            Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Min(0)]).split(size)
+                        };
+                        let list_height = chunks[1].height.saturating_sub(2) as usize;
                         update_dmesg_buffer(dmesg_lines, scroll_y, *auto_scroll, list_height);
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
@@ -499,100 +503,4 @@ fn run_app<B: Backend>(
                         if *scroll_y > 0 {
                             if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
                                 let low = l.to_lowercase();
-                                low.contains("warn") || low.contains("err") || low.contains("fail")
-                            }) {
-                                *scroll_y = pos.0;
-                            }
-                        }
-                    }
-                    (_, KeyCode::F(2)) => {
-                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(3)) => {
-                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(4)) => {
-                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(6)) => {
-                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        if !*show_help_modal {
-                            search.push(c);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Backspace) => {
-                        if !*show_help_modal {
-                            search.pop();
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Up) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 { *scroll_y -= 1; }
-                    }
-                    (_, KeyCode::Down) => {
-                        *scroll_y += 1;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::PageUp) => {
-                        *auto_scroll = false;
-                        *scroll_y = scroll_y.saturating_sub(list_height);
-                    }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                                low.contains("warn") || low.contains("
