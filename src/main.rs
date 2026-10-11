@@ -290,16 +290,16 @@ fn run_app<B: Backend>(
                 LogSource::Dmesg => "dmesg",
                 LogSource::Journalctl => "journalctl",
             };
-            let filter_str = match active_filter {
-                LogFilter::All => "ALL",
-                LogFilter::Warn => "WARN (F2)",
-                LogFilter::Info => "INFO (F3)",
-                LogFilter::Err => "ERR (F4)",
-                LogFilter::Notice => "NOTICE (F5)",
-            };
+
+            let f2_label = if *active_filter == LogFilter::Warn { "[F2:WARN*]" } else { "F2:Warn" };
+            let f3_label = if *active_filter == LogFilter::Info { "[F3:INFO*]" } else { "F3:Info" };
+            let f4_label = if *active_filter == LogFilter::Err { "[F4:ERR*]" } else { "F4:Err" };
+            let f5_label = if *active_filter == LogFilter::Notice { "[F5:NOTICE*]" } else { "F5:Notice" };
+            let all_label = if *active_filter == LogFilter::All { "[ALL]" } else { "All" };
+
             let top_text = format!(
-                "Source: {} | Search: {} | Filter: {} | Auto: {} | [Ctrl+q]uit [Ctrl+r]otate [Ctrl+j]source [Ctrl+s]export [F1/Ctrl+h]help",
-                source_str, search, filter_str, auto_status
+                "Source: {} | Filters: {} {} {} {} {} | Auto: {}\nSearch: {} | [Ctrl+q]uit [Ctrl+r]efresh [Ctrl+j]source [Ctrl+s]export [F1]help",
+                source_str, all_label, f2_label, f3_label, f4_label, f5_label, auto_status, search
             );
             f.render_widget(
                 Paragraph::new(top_text)
@@ -333,23 +333,26 @@ fn run_app<B: Backend>(
                             let low = l.to_lowercase();
                             low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
                             || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
-                            || low.contains("slow") || low.contains("bug")
+                            || low.contains("slow") || low.contains("bug") || low.contains("<4>") || low.contains("restricted")
                         }
                         LogFilter::Info => {
                             let low = l.to_lowercase();
                             low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") 
                             || low.contains("libata") || low.contains("usb") || low.contains("pci") || low.contains("cpu") 
-                            || low.contains("acpi") || low.contains("net") || low.contains("init")
+                            || low.contains("acpi") || low.contains("net") || low.contains("init") || low.contains("link") 
+                            || low.contains("driver") || low.contains("scsi") || low.contains("<6>") || low.contains("<5>")
                         }
                         LogFilter::Err => {
                             let low = l.to_lowercase();
                             low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") 
                             || low.contains("fault") || low.contains("segfault") || low.contains("oops") || low.contains("denied")
+                            || low.contains("timeout") || low.contains("dead") || low.contains("<3>") || low.contains("<2>") || low.contains("<1>") || low.contains("<0>")
                         }
                         LogFilter::Notice => {
                             let low = l.to_lowercase();
                             low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") 
                             || low.contains("version") || low.contains("boot") || low.contains("mount") || low.contains("system")
+                            || low.contains("command line") || low.contains("memory:")
                         }
                     };
                     matches_search && matches_filter
@@ -376,11 +379,11 @@ fn run_app<B: Backend>(
                     };
 
                     let lower = l.to_lowercase();
-                    let fg_color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("error") || lower.contains("fault") || lower.contains("segfault") || lower.contains("oops") || lower.contains("denied") {
+                    let fg_color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("error") || lower.contains("fault") || lower.contains("segfault") || lower.contains("oops") || lower.contains("denied") || lower.contains("<3>") || lower.contains("<2>") || lower.contains("<1>") || lower.contains("<0>") {
                         Color::Red
-                    } else if lower.contains("warn") || lower.contains("warning") || lower.contains("bad") || lower.contains("degraded") || lower.contains("slow") || lower.contains("bug") {
+                    } else if lower.contains("warn") || lower.contains("warning") || lower.contains("bad") || lower.contains("degraded") || lower.contains("slow") || lower.contains("bug") || lower.contains("<4>") {
                         Color::Yellow
-                    } else if lower.contains("info") || lower.contains("usb") || lower.contains("pci") || lower.contains("cpu") || lower.contains("acpi") || lower.contains("net") || lower.contains("registered") {
+                    } else if lower.contains("info") || lower.contains("usb") || lower.contains("pci") || lower.contains("cpu") || lower.contains("acpi") || lower.contains("net") || lower.contains("registered") || lower.contains("<6>") || lower.contains("<5>") {
                         Color::Cyan
                     } else if lower.contains("notice") || lower.contains("note") || lower.contains("ready") || lower.contains("started") || lower.contains("version") || lower.contains("boot") || lower.contains("mount") {
                         Color::Magenta
@@ -533,142 +536,4 @@ fn run_app<B: Backend>(
                         *auto_scroll = !*auto_scroll;
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
-                        *show_info_panel = !*show_info_panel;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
-                        *show_help_modal = !*show_help_modal;
-                    }
-                    (_, KeyCode::Esc) => {
-                        if *show_help_modal {
-                            *show_help_modal = false;
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let filtered_lines: Vec<String> = dmesg_lines
-                            .iter()
-                            .filter(|l| l.contains(&*search))
-                            .cloned()
-                            .collect();
-                        if fs::write("kdmsg_export.txt", filtered_lines.join("\n")).is_ok() {
-                            *export_status = Some("[Exported!]".to_string());
-                        } else {
-                            *export_status = Some("[Export Failed!]".to_string());
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Up) => {
-                        if *port_scroll > 0 { *port_scroll -= 1; }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Down) => {
-                        *port_scroll += 1;
-                    }
-                    (KeyModifiers::NONE, KeyCode::Tab) => {
-                        *auto_scroll = false;
-                        if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
-                            let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
-                        }) {
-                            *scroll_y = pos.0;
-                        }
-                    }
-                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 {
-                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
-                                let low = l.to_lowercase();
-                                low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
-                            }) {
-                                *scroll_y = pos.0;
-                            }
-                        }
-                    }
-                    (_, KeyCode::F(2)) => {
-                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(3)) => {
-                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(4)) => {
-                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(5)) => {
-                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        if !*show_help_modal {
-                            search.push(c);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Backspace) => {
-                        if !*show_help_modal {
-                            search.pop();
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Up) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 { *scroll_y -= 1; }
-                    }
-                    (_, KeyCode::Down) => {
-                        *scroll_y += 1;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::PageUp) => {
-                        *auto_scroll = false;
-                        *scroll_y = scroll_y.saturating_sub(list_height);
-                    }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                        *show
