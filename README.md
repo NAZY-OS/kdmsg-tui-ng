@@ -16,12 +16,19 @@
    chmod +x build.sh
    ```
 
-3. Run Script
+3. Run Script and install
    ```sh
    ./build.sh
+   rm -rf build
+   meson setup build
+   sudo meson install -C build
    ```
 
-
+4. Install Systeme Service
+   ```sh
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now kdmsg-tui.service
+   ```
  
 ---
  \
