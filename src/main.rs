@@ -57,7 +57,7 @@ fn main() -> io::Result<()> {
     let mut nets = Networks::new_with_refreshed_list();
 
     let mut last_refresh = Instant::now();
-    let refresh_interval = Duration::from_secs(3);
+    let refresh_interval = Duration::from_secs(2);
 
     let res = run_app(
         &mut terminal,
@@ -298,7 +298,7 @@ fn run_app<B: Backend>(
             let all_label = if *active_filter == LogFilter::All { "[ALL]" } else { "All" };
 
             let top_text = format!(
-                "Source: {} | Filters: {} {} {} {} {} | Auto: {}\nSearch: {} | [Ctrl+q]uit [Ctrl+r]efresh [Ctrl+j]source [Ctrl+s]export [F1]help",
+                "Source: {} | Filters: {} {} {} {} {} | Auto: {}\nSearch: {} | [Ctrl+q]uit [Ctrl+j]source [Ctrl+s]export [F1]help",
                 source_str, all_label, f2_label, f3_label, f4_label, f5_label, auto_status, search
             );
             f.render_widget(
@@ -498,7 +498,6 @@ fn run_app<B: Backend>(
                     Line::from(Span::styled(" KDMSG-TUI-NG HELP & SHORTCUTS ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
                     Line::from(""),
                     Line::from(vec![Span::styled(" Ctrl + q        ", Style::default().fg(Color::Green)), Span::raw(": Quit application")]),
-                    Line::from(vec![Span::styled(" Ctrl + r        ", Style::default().fg(Color::Green)), Span::raw(": Rotate / Refresh logs")]),
                     Line::from(vec![Span::styled(" Ctrl + j        ", Style::default().fg(Color::Green)), Span::raw(": Toggle log source (dmesg / journalctl)")]),
                     Line::from(vec![Span::styled(" Ctrl + a        ", Style::default().fg(Color::Green)), Span::raw(": Toggle auto-scroll")]),
                     Line::from(vec![Span::styled(" Ctrl + i        ", Style::default().fg(Color::Green)), Span::raw(": Toggle info panel")]),
@@ -521,10 +520,6 @@ fn run_app<B: Backend>(
             match event::read()? {
                 Event::Key(k) => match (k.modifiers, k.code) {
                     (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
-                    (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
-                        *auto_scroll = true;
-                        spawn_log_fetcher(tx.clone(), *log_source);
-                    }
                     (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
                         *log_source = match *log_source {
                             LogSource::Dmesg => LogSource::Journalctl,
