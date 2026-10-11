@@ -226,22 +226,10 @@ fn run_app<B: Backend>(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 Message::LogsUpdated(new_lines) => {
-                    let old_len = dmesg_lines.len();
                     *dmesg_lines = new_lines;
-                    if *auto_scroll && dmesg_lines.len() > old_len {
-                        *scroll_y = dmesg_lines.len().saturating_sub(1);
-                    }
                 }
             }
         }
-
-        let size = terminal.size()?;
-        // Nochmals 2 Zeilen weniger für dmesg (insgesamt 4 weniger als zuvor), damit unten maximal Platz ist
-        let list_height = if *show_info_panel {
-            if size.height > 28 { (size.height - 22) as usize } else { 4 }
-        } else {
-            (size.height.saturating_sub(6)) as usize
-        };
 
         if last_refresh.elapsed() >= refresh_interval {
             spawn_log_fetcher(tx.clone(), *log_source);
@@ -252,14 +240,15 @@ fn run_app<B: Backend>(
         nets.refresh();
 
         terminal.draw(|f| {
+            // Layout dynamisch an den Bildschirm anpassen
             let chunks = if *show_info_panel {
                 Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(3),
-                        Constraint::Min(4),
-                        Constraint::Length(8),
-                        Constraint::Length(5),
+                        Constraint::Length(3), // Control Panel oben
+                        Constraint::Min(10),   // Log-Bereich (nimmt jetzt den gesamten freien Platz ein)
+                        Constraint::Length(7), // System & Network Dashboard
+                        Constraint::Length(5), // Listening Ports unten
                     ])
                     .split(f.size())
             } else {
@@ -267,10 +256,12 @@ fn run_app<B: Backend>(
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(3),
-                        Constraint::Min(6),
+                        Constraint::Min(10),
                     ])
                     .split(f.size())
             };
+
+            let list_height = chunks[1].height.saturating_sub(2) as usize;
 
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
@@ -437,33 +428,32 @@ fn run_app<B: Backend>(
                 );
             }
 
-            // Hilfe-Modal Overlay (Weißer Text auf blauem Hintergrund)
             if *show_help_modal {
                 let area = f.size();
                 let popup_area = Rect {
-                    x: area.width / 4,
-                    y: area.height / 5,
-                    width: area.width / 2,
-                    height: (area.height * 3) / 5,
+                    x: area.width / 8,
+                    y: area.height / 6,
+                    width: (area.width * 3) / 4,
+                    height: (area.height * 2) / 3,
                 };
                 let help_text = vec![
                     Line::from("=== KDMSG-TUI-NG HOTKEYS ==="),
                     Line::from(""),
-                    Line::from("Ctrl + q         : Beenden (Quit)"),
-                    Line::from("Ctrl + r         : Logs neu laden (Rotate)"),
-                    Line::from("Ctrl + j         : Log-Quelle wechseln (dmesg / journalctl)"),
-                    Line::from("Ctrl + a         : Auto-Scroll ein/ausschalten"),
-                    Line::from("Ctrl + i         : Info-Panel ein/ausblenden"),
-                    Line::from("Ctrl + s         : Gefilterte Logs exportieren"),
-                    Line::from("F1 / Ctrl + h    : Hilfe-Ansicht umschalten / Schließen"),
-                    Line::from("Esc              : Hilfe-Ansicht schließen"),
-                    Line::from("Tab / Shift+Tab  : Zu nächster / vorheriger Warnung/Fehler springen"),
-                    Line::from("F2 / F3 / F4     : Filter-Presets (Warn, Info, Err)"),
-                    Line::from("Ctrl + ↑ / ↓     : Ports-Liste scrollen"),
+                    Line::from("Ctrl + q         : Quit application"),
+                    Line::from("Ctrl + r         : Rotate / Refresh logs"),
+                    Line::from("Ctrl + j         : Toggle log source (dmesg / journalctl)"),
+                    Line::from("Ctrl + a         : Toggle auto-scroll"),
+                    Line::from("Ctrl + i         : Toggle info dashboard panel"),
+                    Line::from("Ctrl + s         : Export filtered logs to 'kdmsg_export.txt'"),
+                    Line::from("F1 / Ctrl + h    : Toggle / Close help screen"),
+                    Line::from("Esc              : Close help screen"),
+                    Line::from("Tab / Shift+Tab  : Jump to next / previous warning/error"),
+                    Line::from("F2 / F3 / F4     : Filter presets (Warn, Info, Err)"),
+                    Line::from("Ctrl + ↑ / ↓     : Scroll listening ports"),
                 ];
                 let help_paragraph = Paragraph::new(help_text)
                     .style(Style::default().fg(Color::White).bg(Color::Blue))
-                    .block(Block::default().borders(Borders::ALL).title(" Hilfe & Shortcuts ").style(Style::default().fg(Color::White).bg(Color::Blue)))
+                    .block(Block::default().borders(Borders::ALL).title(" Help & Shortcuts ").style(Style::default().fg(Color::White).bg(Color::Blue)))
                     .alignment(Alignment::Center);
                 
                 f.render_widget(Clear, popup_area);
@@ -520,6 +510,8 @@ fn run_app<B: Backend>(
                     }
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         *auto_scroll = false;
+                        let size = terminal.size()?;
+                        let list_height = if *show_info_panel { (size.height.saturating_sub(18)) as usize } else { (size.height.saturating_sub(6)) as usize };
                         if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
                             let low = l.to_lowercase();
                             low.contains("warn") || low.contains("err") || low.contains("fail")
@@ -571,21 +563,20 @@ fn run_app<B: Backend>(
                         if *scroll_y > 0 { *scroll_y -= 1; }
                     }
                     (_, KeyCode::Down) => {
+                        *auto_scroll = false;
                         *scroll_y += 1;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *auto_scroll = true;
-                        }
                     }
                     (_, KeyCode::PageUp) => {
                         *auto_scroll = false;
+                        let size = terminal.size()?;
+                        let list_height = if *show_info_panel { (size.height.saturating_sub(18)) as usize } else { (size.height.saturating_sub(6)) as usize };
                         *scroll_y = scroll_y.saturating_sub(list_height);
                     }
                     (_, KeyCode::PageDown) => {
+                        *auto_scroll = false;
+                        let size = terminal.size()?;
+                        let list_height = if *show_info_panel { (size.height.saturating_sub(18)) as usize } else { (size.height.saturating_sub(6)) as usize };
                         *scroll_y += list_height;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
-                            *auto_scroll = true;
-                        }
                     }
                     (_, KeyCode::Left) => {
                         *scroll_x = scroll_x.saturating_sub(3);
@@ -608,10 +599,8 @@ fn run_app<B: Backend>(
                         if m.modifiers.contains(KeyModifiers::ALT) {
                             *scroll_x += 3;
                         } else {
+                            *auto_scroll = false;
                             *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
-                                *auto_scroll = true;
-                            }
                         }
                     }
                     MouseEventKind::ScrollLeft => {
