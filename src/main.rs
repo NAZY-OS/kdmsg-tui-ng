@@ -95,23 +95,12 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                // Verbesserter dmesg Aufruf für vollständige und saubere Logs
-                if let Ok(out) = Command::new("dmesg").args(["-k", "-T", "--raw"]).output() {
+                if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
-                    if raw.trim().is_empty() {
-                        // Fallback falls --raw nicht unterstützt wird
-                        if let Ok(out_fallback) = Command::new("dmesg").args(["-k", "-T"]).output() {
-                            let raw_fb = String::from_utf8_lossy(&out_fallback.stdout);
-                            let year_regex = Regex::new(r" \d{4}\]").unwrap();
-                            raw_fb.lines()
-                                .map(|s| year_regex.replace(s, "]").to_string())
-                                .collect()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        raw.lines().map(|s| s.to_string()).collect()
-                    }
+                    let year_regex = Regex::new(r" \d{4}\]").unwrap();
+                    raw.lines()
+                        .map(|s| year_regex.replace(s, "]").to_string())
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -310,19 +299,26 @@ fn run_app<B: Backend>(
                         LogFilter::All => true,
                         LogFilter::Warn => {
                             let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop")
+                            // Großzügigerer Warn-Filter für maximale Trefferquote
+                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
+                            || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
+                            || low.contains("slow") || low.contains("unk") || low.contains("sched") || low.contains("bug")
                         }
                         LogFilter::Info => {
                             let low = l.to_lowercase();
-                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") || low.contains("libata") || low.contains("usb")
+                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") 
+                            || low.contains("libata") || low.contains("usb") || low.contains("pci") || low.contains("cpu") 
+                            || low.contains("acpi") || low.contains("net") || low.contains("init")
                         }
                         LogFilter::Err => {
                             let low = l.to_lowercase();
-                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") || low.contains("fault") || low.contains("segfault") || low.contains("oops")
+                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") 
+                            || low.contains("fault") || low.contains("segfault") || low.contains("oops") || low.contains("denied")
                         }
                         LogFilter::Notice => {
                             let low = l.to_lowercase();
-                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") || low.contains("version") || low.contains("boot")
+                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") 
+                            || low.contains("version") || low.contains("boot") || low.contains("mount") || low.contains("system")
                         }
                     };
                     matches_search && matches_filter
@@ -351,7 +347,7 @@ fn run_app<B: Backend>(
                     let lower = l.to_lowercase();
                     let (fg_color, bg_color) = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("oops") {
                         (Color::Red, Color::Black)
-                    } else if lower.contains("warn") || lower.contains("bad") {
+                    } else if lower.contains("warn") || lower.contains("bad") || lower.contains("bug") {
                         (Color::Yellow, Color::Black)
                     } else {
                         (Color::Green, Color::Black)
@@ -534,7 +530,7 @@ fn run_app<B: Backend>(
                         *auto_scroll = false;
                         if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
                             let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("err") || low.contains("fail")
+                            low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
                         }) {
                             *scroll_y = pos.0;
                         }
@@ -544,7 +540,7 @@ fn run_app<B: Backend>(
                         if *scroll_y > 0 {
                             if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
                                 let low = l.to_lowercase();
-                                low.contains("warn") || low.contains("err") || low.contains("fail")
+                                low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
                             }) {
                                 *scroll_y = pos.0;
                             }
