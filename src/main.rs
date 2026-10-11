@@ -367,14 +367,21 @@ fn run_app<B: Backend>(
                 );
 
                 let ports_vec = get_clean_listening_ports();
-                let ports_items: Vec<ListItem> = ports_vec
+                let ports_items: ListItemList = ports_vec
                     .iter()
                     .skip(*port_scroll)
                     .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
-                    .collect();
+                    .collect(); // korrigiert zu standard ListItem collection
 
+                // (Fix im Widget-Block unten übernommen)
                 f.render_widget(
-                    List::new(ports_items).block(
+                    List::new(
+                        ports_vec
+                            .iter()
+                            .skip(*port_scroll)
+                            .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
+                            .collect::<Vec<ListItem>>()
+                    ).block(
                         Block::default()
                             .borders(Borders::ALL)
                             .title(format!("Listening IPv4 Ports (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
@@ -384,31 +391,70 @@ fn run_app<B: Backend>(
                 );
             }
 
-            // Breites Hilfe-Modal (Weißer Text auf blauem Hintergrund)
+            // Schöneres, professionell gestaltetes Hilfe-Modal (F1 / Ctrl + h)
             if *show_help_modal {
                 let area = f.size();
                 let popup_area = Rect {
-                    x: area.width / 8,
+                    x: area.width / 6,
                     y: area.height / 6,
-                    width: (area.width * 3) / 4,
+                    width: (area.width * 2) / 3,
                     height: (area.height * 2) / 3,
                 };
-                let help_text = vec![
-                    Line::from("=== KDMSG-TUI-NG HOTKEYS ==="),
+
+                let help_lines = vec![
+                    Line::from(Span::styled("═══════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
+                    Line::from(Span::styled("                   KDMSG-TUI-NG HELP & SHORTCUTS           ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+                    Line::from(Span::styled("═══════════════════════════════════════════════════════════", Style::default().fg(Color::LightCyan))),
                     Line::from(""),
-                    Line::from("Ctrl + q         : Quit application"),
-                    Line::from("Ctrl + r         : Refresh / Rotate logs"),
-                    Line::from("Ctrl + a         : Toggle auto-scroll"),
-                    Line::from("Ctrl + i         : Toggle info panel"),
-                    Line::from("F1 / Ctrl + h    : Toggle / Close help screen"),
-                    Line::from("Esc              : Close help screen"),
-                    Line::from("Tab / Shift+Tab  : Jump to next / previous warning/error"),
-                    Line::from("F2 / F3 / F4     : Filter presets (Warn, Info, Err)"),
-                    Line::from("Ctrl + ↑ / ↓     : Scroll listening ports"),
+                    Line::from(vec![
+                        Span::styled("  Ctrl + q         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Quit application cleanly"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Ctrl + r         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Force refresh / rotate log buffer"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Ctrl + a         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Toggle auto-scrolling mode"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Ctrl + i         ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Toggle system & network info panel"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  F1 / Ctrl + h    ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Open / Close this help overlay"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Esc              ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Close help overlay / Clear search"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Tab / Shift+Tab  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Jump to next / previous warning or error"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  F2 / F3 / F4     ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Quick filter presets (Warn, Info, Err)"),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  Ctrl + ↑ / ↓     ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": Scroll through listening ports list"),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled(" Press [F1], [Ctrl+h] or [Esc] to close this window ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::ITALIC))),
                 ];
-                let help_paragraph = Paragraph::new(help_text)
+
+                let help_paragraph = Paragraph::new(help_lines)
                     .style(Style::default().fg(Color::White).bg(Color::Blue))
-                    .block(Block::default().borders(Borders::ALL).title(" Help & Shortcuts ").style(Style::default().fg(Color::White).bg(Color::Blue)))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::White))
+                            .title(" Guide ")
+                            .style(Style::default().fg(Color::White).bg(Color::Blue))
+                    )
                     .alignment(Alignment::Center);
                 
                 f.render_widget(Clear, popup_area);
@@ -436,6 +482,9 @@ fn run_app<B: Backend>(
                     (_, KeyCode::Esc) => {
                         if *show_help_modal {
                             *show_help_modal = false;
+                        } else {
+                            search.clear();
+                            *auto_scroll = true;
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
@@ -527,31 +576,4 @@ fn run_app<B: Backend>(
                             *scroll_x = scroll_x.saturating_sub(3);
                         } else {
                             *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                            if *scroll_y >
