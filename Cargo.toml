@@ -1,5 +1,5 @@
 [package]
-name = "dmesg_tui"
+name = "kdmsg-tui-ng"
 version = "1.3.0"
 edition = "2021"
  
