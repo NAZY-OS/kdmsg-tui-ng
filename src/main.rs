@@ -301,10 +301,22 @@ fn run_app<B: Backend>(
 
                     let matches_filter = match active_filter {
                         LogFilter::All => true,
-                        LogFilter::Warn => l.to_lowercase().contains("warn"),
-                        LogFilter::Info => l.to_lowercase().contains("info"),
-                        LogFilter::Err => l.to_lowercase().contains("err") || l.to_lowercase().contains("fail"),
-                        LogFilter::Notice => l.to_lowercase().contains("notice"),
+                        LogFilter::Warn => {
+                            let low = l.to_lowercase();
+                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint")
+                        }
+                        LogFilter::Info => {
+                            let low = l.to_lowercase();
+                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected")
+                        }
+                        LogFilter::Err => {
+                            let low = l.to_lowercase();
+                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") || low.contains("fault") || low.contains("segfault")
+                        }
+                        LogFilter::Notice => {
+                            let low = l.to_lowercase();
+                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") || low.contains("version")
+                        }
                     };
                     matches_search && matches_filter
                 })
