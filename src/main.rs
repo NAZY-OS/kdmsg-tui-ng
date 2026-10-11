@@ -92,15 +92,26 @@ fn main() -> io::Result<()> {
 }
 
 fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
-    thread_spawn(move || {
+    std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                if let Ok(out) = Command::new("dmesg").args(["-k", "-T"]).output() {
+                // Verbesserter dmesg Aufruf für vollständige und saubere Logs
+                if let Ok(out) = Command::new("dmesg").args(["-k", "-T", "--raw"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
-                    let year_regex = Regex::new(r" \d{4}\]").unwrap();
-                    raw.lines()
-                        .map(|s| year_regex.replace(s, "]").to_string())
-                        .collect()
+                    if raw.trim().is_empty() {
+                        // Fallback falls --raw nicht unterstützt wird
+                        if let Ok(out_fallback) = Command::new("dmesg").args(["-k", "-T"]).output() {
+                            let raw_fb = String::from_utf8_lossy(&out_fallback.stdout);
+                            let year_regex = Regex::new(r" \d{4}\]").unwrap();
+                            raw_fb.lines()
+                                .map(|s| year_regex.replace(s, "]").to_string())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        raw.lines().map(|s| s.to_string()).collect()
+                    }
                 } else {
                     Vec::new()
                 }
@@ -116,10 +127,6 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
         };
         let _ = tx.send(Message::LogsUpdated(lines));
     });
-}
-
-fn thread_spawn<F>(f: F) where F: FnOnce() + Send + 'static {
-    std::thread::spawn(f);
 }
 
 fn render_bar(current: u64, total: u64, width: usize) -> String {
@@ -303,19 +310,19 @@ fn run_app<B: Backend>(
                         LogFilter::All => true,
                         LogFilter::Warn => {
                             let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint")
+                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop")
                         }
                         LogFilter::Info => {
                             let low = l.to_lowercase();
-                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected")
+                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") || low.contains("libata") || low.contains("usb")
                         }
                         LogFilter::Err => {
                             let low = l.to_lowercase();
-                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") || low.contains("fault") || low.contains("segfault")
+                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") || low.contains("fault") || low.contains("segfault") || low.contains("oops")
                         }
                         LogFilter::Notice => {
                             let low = l.to_lowercase();
-                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") || low.contains("version")
+                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") || low.contains("version") || low.contains("boot")
                         }
                     };
                     matches_search && matches_filter
@@ -342,9 +349,9 @@ fn run_app<B: Backend>(
                     };
 
                     let lower = l.to_lowercase();
-                    let (fg_color, bg_color) = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") {
+                    let (fg_color, bg_color) = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("oops") {
                         (Color::Red, Color::Black)
-                    } else if lower.contains("warn") {
+                    } else if lower.contains("warn") || lower.contains("bad") {
                         (Color::Yellow, Color::Black)
                     } else {
                         (Color::Green, Color::Black)
