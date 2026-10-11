@@ -265,7 +265,7 @@ fn run_app<B: Backend>(
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
                 LogSource::Dmesg => "dmesg",
-                LogSource::Journalctl => "journalctl",
+                LogSource::Journalctl =>"journalctl",
             };
             let filter_str = match active_filter {
                 LogFilter::All => "ALL",
@@ -284,24 +284,36 @@ fn run_app<B: Backend>(
                 chunks[0],
             );
 
-            let search_regex = Regex::new(search).ok();
+            // Intelligente Suche: Leerzeichen werden als Wildcard (.*) interpretiert, Groß-/Kleinschreibung egal
+            let search_pattern = if search.is_empty() {
+                None
+            } else {
+                let escaped_parts: Vec<String> = search
+                    .split_whitespace()
+                    .map(|part| regex::escape(part))
+                    .collect();
+                let combined = format!("(?i){}", escaped_parts.join(".*"));
+                Regex::new(&combined).ok()
+            };
 
             let filtered_lines: Vec<&String> = dmesg_lines
                 .iter()
                 .filter(|l| {
-                    let matches_search = if let Some(ref reg) = search_regex {
+                    // 1. Suchfilter (mit Leerzeichen als .* und Case-Insensitive)
+                    let matches_search = if let Some(ref reg) = search_pattern {
                         reg.is_match(l)
                     } else {
-                        l.contains(&*search)
+                        true
                     };
 
+                    // 2. Preset-Filter (F2 bis F5)
                     let matches_filter = match active_filter {
                         LogFilter::All => true,
                         LogFilter::Warn => {
                             let low = l.to_lowercase();
                             low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
                             || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
-                            || low.contains("slow") || low.contains("unk") || low.contains("sched") || low.contains("bug")
+                            || low.contains("slow") || low.contains("bug")
                         }
                         LogFilter::Info => {
                             let low = l.to_lowercase();
@@ -344,7 +356,6 @@ fn run_app<B: Backend>(
                     };
 
                     let lower = l.to_lowercase();
-                    // Intelligente Farb-Logik basierend auf Log-Prioritäten und Mustern
                     let fg_color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("error") || lower.contains("fault") || lower.contains("segfault") || lower.contains("oops") || lower.contains("denied") {
                         Color::Red
                     } else if lower.contains("warn") || lower.contains("warning") || lower.contains("bad") || lower.contains("degraded") || lower.contains("slow") || lower.contains("bug") {
