@@ -247,7 +247,6 @@ fn run_app<B: Backend>(
     let gateway_ip = get_default_gateway();
 
     loop {
-        // Status nach 3 Sekunden automatisch ausblenden
         if let Some(timer) = *export_timer {
             if timer.elapsed() >= Duration::from_secs(3) {
                 *export_status = None;
@@ -559,8 +558,14 @@ fn run_app<B: Backend>(
                             .cloned()
                             .collect();
                         
-                        let export_path = "/var/log/kdmsg_export.txt";
-                        if fs::write(export_path, filtered_lines.join("\n")).is_ok() {
+                        let timestamp_str = if let Ok(out) = Command::new("date").args(["+%Y-%m-%d_%H-%M"]).output() {
+                            String::from_utf8_lossy(&out.stdout).trim().to_string()
+                        } else {
+                            "unknown-time".to_string()
+                        };
+
+                        let export_path = format!("/var/log/kdmsg_export_{}.log", timestamp_str);
+                        if fs::write(&export_path, filtered_lines.join("\n")).is_ok() {
                             *export_status = Some(format!("[Saved: {}]", export_path));
                             *export_timer = Some(Instant::now());
                         } else {
