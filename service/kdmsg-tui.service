@@ -1,16 +1,28 @@
 [Unit]
-Description=KDMSG TUI Service on TTY 11
+Description=KDMSG TUI Diagnostic Service on TTY 11
 After=systemd-user-sessions.service network.target
+Conflicts=getty@tty11.service
+Before=getty@tty11.service
 
 [Service]
 ExecStart=/sbin/kdmsg-tui-ng
 Restart=always
 RestartSec=1
-StandardInput=tty
+
+# TTY & Kiosk Einstellungen
+StandardInput=tty-force
 StandardOutput=tty
+StandardError=tty
 TTYPath=/dev/tty11
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+# Sicherheits- und Rechte-Isolation (läuft als root, schottet aber das TTY ab)
 User=root
 Group=root
+UtmpIdentifier=tty11
+UtmpFacility=syslog
 
 [Install]
 WantedBy=multi-user.target
