@@ -48,6 +48,7 @@ fn main() -> io::Result<()> {
     let mut active_filter = LogFilter::All;
     let mut log_source = LogSource::Dmesg;
     let mut export_status: Option<String> = None;
+    let mut export_timer: Option<Instant> = None;
 
     let (tx, rx): (std::sync::mpsc::Sender<Message>, std::sync::mpsc::Receiver<Message>) = std::sync::mpsc::channel();
 
@@ -72,6 +73,7 @@ fn main() -> io::Result<()> {
         &mut active_filter,
         &mut log_source,
         &mut export_status,
+        &mut export_timer,
         &tx,
         &rx,
         &mut sys,
@@ -233,6 +235,7 @@ fn run_app<B: Backend>(
     active_filter: &mut LogFilter,
     log_source: &mut LogSource,
     export_status: &mut Option<String>,
+    export_timer: &mut Option<Instant>,
     tx: &std::sync::mpsc::Sender<Message>,
     rx: &std::sync::mpsc::Receiver<Message>,
     sys: &mut System,
@@ -244,6 +247,14 @@ fn run_app<B: Backend>(
     let gateway_ip = get_default_gateway();
 
     loop {
+        // Status nach 3 Sekunden automatisch ausblenden
+        if let Some(timer) = *export_timer {
+            if timer.elapsed() >= Duration::from_secs(3) {
+                *export_status = None;
+                *export_timer = None;
+            }
+        }
+
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 Message::LogsUpdated(new_lines) => {
@@ -547,10 +558,14 @@ fn run_app<B: Backend>(
                             .filter(|l| l.contains(&*search))
                             .cloned()
                             .collect();
-                        if fs::write("kdmsg_export.txt", filtered_lines.join("\n")).is_ok() {
-                            *export_status = Some("[Exported!]".to_string());
+                        
+                        let export_path = "/var/log/kdmsg_export.txt";
+                        if fs::write(export_path, filtered_lines.join("\n")).is_ok() {
+                            *export_status = Some(format!("[Saved: {}]", export_path));
+                            *export_timer = Some(Instant::now());
                         } else {
                             *export_status = Some("[Export Failed!]".to_string());
+                            *export_timer = Some(Instant::now());
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Up) => {
