@@ -19,9 +19,9 @@
 3. Run Script and install
    ```sh
    ./build.sh
-   rm -rf build
    meson setup build
    sudo meson install -C build
+   rm -rf build
    ```
 
 4. Install Systeme Service
@@ -33,7 +33,7 @@
 ---
  \
  \
-![kdmsg-tui-ng](https://github.com/NAZY-OS/kdmsg-tui-ng/blob/main/screenshot/Screenshot_RC.png)
+![kdmsg-tui-ng](https://github.com/NAZY-OS/kdmsg-tui-ng/blob/main/screenshot/Screenshot_RC-III.png)
 
 ## F1 help infos
 ![kdmsg-tui-ng-help](https://github.com/NAZY-OS/kdmsg-tui-ng/blob/main/screenshot/Screenshot_RC-II.png)
