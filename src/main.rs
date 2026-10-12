@@ -449,7 +449,7 @@ fn run_app<B: Backend>(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(format!(
-                            " Logs ({}) [Filter: {:?}] - Showing lines {}-{} of {} (Total Buffer: {}){}", 
+                            " Logs [{}] | Filter: {:?} | Showing {}-{} of {} matches | Total: {} lines{}", 
                             source_str, 
                             *active_filter,
                             start_line,
@@ -713,7 +713,7 @@ fn run_app<B: Backend>(
                         } else {
                             *scroll_y += 1;
                             let view_state = LogViewState::update(dmesg_lines, search, active_filter);
-                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                             if *scroll_y >= max_scroll {
                                 *auto_scroll = true;
                             }
