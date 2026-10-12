@@ -127,7 +127,7 @@ fn main() -> io::Result<()> {
     let mut auto_scroll = true;
     let mut show_info_panel = true;
     let mut show_help_modal = false;
-    let mut active_filter = LogFilter::All;
+    let mut active_filter = LogFilter::All; // Hier auf All gestellt
     let mut log_source = LogSource::Dmesg;
     let mut export_status: Option<String> = None;
     let mut export_timer: Option<Instant> = None;
@@ -190,7 +190,7 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
             LogSource::Journalctl => {
-                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short"]).output() {
+                if let Ok(out) = Command::new("journalctl").args(["--all", "-o", "short"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     raw.lines().map(|s| s.to_string()).collect()
                 } else {
