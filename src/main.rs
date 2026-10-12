@@ -11,7 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use sysinfo::{Networks, System};
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum LogFilter {
     All,
     Warn,
@@ -161,7 +161,6 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                // Completely dynamic dmesg ring buffer (kernel + kmsg userspace logs)
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     let year_regex = Regex::new(r" \d{4}\]").unwrap();
@@ -173,7 +172,6 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
             LogSource::Journalctl => {
-                // Completely dynamic systemd journal for the current boot (no fixed line limit)
                 if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     raw.lines().map(|s| s.to_string()).collect()
@@ -598,7 +596,7 @@ fn run_app<B: Backend>(
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                         let filtered_lines: Vec<String> = view_state.filtered_indices
                             .iter()
                             .map(|&idx| dmesg_lines[idx].clone())
@@ -627,14 +625,14 @@ fn run_app<B: Backend>(
                     }
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         *auto_scroll = false;
-                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                         if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
                             *scroll_y = pos;
                         }
                     }
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
-                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                         if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
                             *scroll_y = pos;
                         }
@@ -645,7 +643,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::F(3)) => {
                         *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
+                        *active_filter = true;
                     }
                     (_, KeyCode::F(4)) => {
                         *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
@@ -673,7 +671,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::Down) => {
                         *scroll_y += 1;
-                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                         let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                         if *scroll_y >= max_scroll {
                             *auto_scroll = true;
@@ -685,7 +683,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::PageDown) => {
                         *scroll_y += list_height;
-                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                         let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                         if *scroll_y >= max_scroll {
                             *scroll_y = max_scroll;
@@ -714,7 +712,7 @@ fn run_app<B: Backend>(
                             *scroll_x += 3;
                         } else {
                             *scroll_y += 1;
-                            let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                            let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
                             let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                             if *scroll_y >= max_scroll {
                                 *auto_scroll = true;
