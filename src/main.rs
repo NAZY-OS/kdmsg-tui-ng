@@ -11,8 +11,6 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use sysinfo::{Networks, System};
 
-const MAX_LOG_LINES: usize = 5000;
-
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum LogFilter {
     All,
@@ -179,7 +177,7 @@ fn main() -> io::Result<()> {
 
 fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
-        let mut lines = match source {
+        let lines = match source {
             LogSource::Dmesg => {
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
@@ -200,11 +198,6 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
         };
-
-        if lines.len() > MAX_LOG_LINES {
-            let start = lines.len() - MAX_LOG_LINES;
-            lines = lines.drain(start..).collect();
-        }
 
         let _ = tx.send(Message::LogsUpdated(lines));
     });
