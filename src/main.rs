@@ -486,7 +486,6 @@ fn run_app<B: Backend>(
                 let up_secs = System::uptime();
                 let uptime_str = format_uptime(up_secs);
                 
-                // CPU Gesamtauslastung berechnen
                 let global_cpu = sys.global_cpu_usage();
                 let cpu_bar = render_bar(global_cpu.round() as u64, 100, 15);
 
@@ -510,103 +509,4 @@ fn run_app<B: Backend>(
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
                     
-                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb, up_kb));
-                }
-                let net_display = if net_info_lines.is_empty() {
-                    "  No networks found".to_string()
-                } else {
-                    net_info_lines.join("\n")
-                };
-
-                let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nCPU:  {} ({:.1}%)\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
-                    distro,
-                    boot_time_str,
-                    uptime_str,
-                    cpu_bar, global_cpu,
-                    ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
-                    swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
-                    gateway_ip,
-                    net_display
-                );
-
-                f.render_widget(
-                    Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
-                    ),
-                    chunks[3],
-                );
-
-                let ports_vec = get_clean_listening_ports();
-                let ports_items: Vec<ListItem> = ports_vec
-                    .iter()
-                    .skip(*port_scroll)
-                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
-                    .collect();
-
-                f.render_widget(
-                    List::new(ports_items).block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(format!("Listening IPv4 Ports with Process/PID (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
-                            .style(Style::default().fg(Color::Cyan))
-                    ),
-                    chunks[4],
-                );
-            }
-
-            if *show_help_modal {
-                let area = f.size();
-                let popup_width = 64.min(area.width.saturating_sub(4));
-                let popup_height = 16.min(area.height.saturating_sub(4));
-                let popup_area = Rect {
-                    x: (area.width.saturating_sub(popup_width)) / 2,
-                    y: (area.height.saturating_sub(popup_height)) / 2,
-                    width: popup_width,
-                    height: popup_height,
-                };
-
-                let help_text = vec![
-                    Line::from(Span::styled(" KDMSG-TUI-NG HELP & SHORTCUTS ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-                    Line::from(""),
-                    Line::from(vec![Span::styled(" Ctrl + q        ", Style::default().fg(Color::Green)), Span::raw(": Quit application")]),
-                    Line::from(vec![Span::styled(" Ctrl + j        ", Style::default().fg(Color::Green)), Span::raw(": Toggle log source (dmesg / journalctl)")]),
-                    Line::from(vec![Span::styled(" Ctrl + a        ", Style::default().fg(Color::Green)), Span::raw(": Toggle auto-scroll")]),
-                    Line::from(vec![Span::styled(" Ctrl + i        ", Style::default().fg(Color::Green)), Span::raw(": Toggle info panel")]),
-                    Line::from(vec![Span::styled(" Ctrl + s        ", Style::default().fg(Color::Green)), Span::raw(": Export filtered logs")]),
-                    Line::from(vec![Span::styled(" F1 / Ctrl + h   ", Style::default().fg(Color::Green)), Span::raw(": Toggle help screen")]),
-                    Line::from(vec![Span::styled(" F2..F5          ", Style::default().fg(Color::Green)), Span::raw(": Filter presets (Warn, Info, Err, Notice")]),
-                    Line::from(vec![Span::styled(" Tab / Shift+Tab ", Style::default().fg(Color::Green)), Span::raw(": Jump next / previous warning")]),
-                ];
-                let help_paragraph = Paragraph::new(help_text)
-                    .style(Style::default().fg(Color::White).bg(Color::Blue))
-                    .block(Block::default().borders(Borders::ALL).title(" Help ").style(Style::default().fg(Color::White).bg(Color::Blue)))
-                    .alignment(Alignment::Left);
-                
-                f.render_widget(Clear, popup_area);
-                f.render_widget(help_paragraph, popup_area);
-            }
-        })?;
-
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(k) => match (k.modifiers, k.code) {
-                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
-                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
-                        *log_source = match *log_source {
-                            LogSource::Dmesg => LogSource::Journalctl,
-                            LogSource::Journalctl => LogSource::Dmesg,
-                        };
-                        spawn_log_fetcher(tx.clone(), *log_source);
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
-                        *auto_scroll = !*auto_scroll;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
-                        *show_info_panel = !*show_info_panel;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
-                        *show_help_modal = !*show_help_modal;
-                    }
-                    (_, KeyCode::Esc) => {
-                        if *show_help_
+                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb
