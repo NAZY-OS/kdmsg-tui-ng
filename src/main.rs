@@ -681,4 +681,55 @@ fn run_app<B: Backend>(
                         *auto_scroll = false;
                         *scroll_y = scroll_y.saturating_sub(list_height);
                     }
-                    (_, KeyCode::PageDown
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        let view_state = LogViewState::update(dmesg_lines, search, active_filter);
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        if *scroll_y >= max_scroll {
+                            *scroll_y = max_scroll;
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            let view_state = LogViewState::update(dmesg_lines, search, active_filter);
+                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                            if *scroll_y >= max_scroll {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+
+    Ok(())
+}
