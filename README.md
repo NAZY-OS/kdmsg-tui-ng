@@ -1,5 +1,5 @@
 # kdmsg-tui-ng
-**A tui in rust for kdmsg infos**
+**A tui in rust for searching and displaying kdmsg infos**
 
 
 ## Quick Start
