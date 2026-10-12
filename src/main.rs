@@ -30,6 +30,70 @@ enum Message {
     LogsUpdated(Vec<String>),
 }
 
+struct LogViewState {
+    filtered_indices: Vec<usize>,
+}
+
+impl LogViewState {
+    fn update(lines: &[String], search: &str, filter: &LogFilter) -> Self {
+        let search_pattern = if search.is_empty() {
+            None
+        } else {
+            let escaped_parts: Vec<String> = search
+                .split_whitespace()
+                .map(|part| regex::escape(part))
+                .collect();
+            let combined = format!("(?i){}", escaped_parts.join(".*"));
+            regex::Regex::new(&combined).ok()
+        };
+
+        let filtered_indices = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                let matches_search = if let Some(ref reg) = search_pattern {
+                    reg.is_match(l)
+                } else {
+                    true
+                };
+
+                let matches_filter = match filter {
+                    LogFilter::All => true,
+                    LogFilter::Warn => {
+                        let low = l.to_lowercase();
+                        low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
+                        || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
+                        || low.contains("slow") || low.contains("bug") || low.contains("<4>") || low.contains("restricted")
+                    }
+                    LogFilter::Info => {
+                        let low = l.to_lowercase();
+                        low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") 
+                        || low.contains("libata") || low.contains("usb") || low.contains("pci") || low.contains("cpu") 
+                        || low.contains("acpi") || low.contains("net") || low.contains("init") || low.contains("link") 
+                        || low.contains("driver") || low.contains("scsi") || low.contains("<6>") || low.contains("<5>")
+                    }
+                    LogFilter::Err => {
+                        let low = l.to_lowercase();
+                        low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") 
+                        || low.contains("fault") || low.contains("segfault") || low.contains("oops") || low.contains("denied")
+                        || low.contains("timeout") || low.contains("dead") || low.contains("<3>") || low.contains("<2>") || low.contains("<1>") || low.contains("<0>")
+                    }
+                    LogFilter::Notice => {
+                        let low = l.to_lowercase();
+                        low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") 
+                        || low.contains("version") || low.contains("boot") || low.contains("mount") || low.contains("system")
+                        || low.contains("command line") || low.contains("memory:")
+                    }
+                };
+                matches_search && matches_filter
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        Self { filtered_indices }
+    }
+}
+
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -37,7 +101,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut dmesg_lines: Vec<String> = Vec::with_capacity(10000);
+    let mut dmesg_lines: Vec<String> = Vec::new();
     let mut search = String::new();
     let mut scroll_y: usize = 0;
     let mut scroll_x: usize = 0;
@@ -97,7 +161,7 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                // Real dmesg ring buffer (kernel + kmsg userspace logs)
+                // Completely dynamic dmesg ring buffer (kernel + kmsg userspace logs)
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     let year_regex = Regex::new(r" \d{4}\]").unwrap();
@@ -109,8 +173,8 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
             LogSource::Journalctl => {
-                // Extended limit of 8000 lines for the current boot
-                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short", "-n", "8000"]).output() {
+                // Completely dynamic systemd journal for the current boot (no fixed line limit)
+                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     raw.lines().map(|s| s.to_string()).collect()
                 } else {
@@ -334,71 +398,22 @@ fn run_app<B: Backend>(
                 chunks[1],
             );
 
-            let search_pattern = if search.is_empty() {
-                None
-            } else {
-                let escaped_parts: Vec<String> = search
-                    .split_whitespace()
-                    .map(|part| regex::escape(part))
-                    .collect();
-                let combined = format!("(?i){}", escaped_parts.join(".*"));
-                Regex::new(&combined).ok()
-            };
+            let view_state = LogViewState::update(dmesg_lines, search, active_filter);
+            let filtered_count = view_state.filtered_indices.len();
+            let max_scroll = filtered_count.saturating_sub(list_height);
 
-            let filtered_lines: Vec<&String> = dmesg_lines
-                .iter()
-                .filter(|l| {
-                    let matches_search = if let Some(ref reg) = search_pattern {
-                        reg.is_match(l)
-                    } else {
-                        true
-                    };
-
-                    let matches_filter = match active_filter {
-                        LogFilter::All => true,
-                        LogFilter::Warn => {
-                            let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("warning") || low.contains("deprecat") || low.contains("taint") 
-                            || low.contains("bad") || low.contains("degraded") || low.contains("limit") || low.contains("drop") 
-                            || low.contains("slow") || low.contains("bug") || low.contains("<4>") || low.contains("restricted")
-                        }
-                        LogFilter::Info => {
-                            let low = l.to_lowercase();
-                            low.contains("info") || low.contains("enabling") || low.contains("registered") || low.contains("detected") 
-                            || low.contains("libata") || low.contains("usb") || low.contains("pci") || low.contains("cpu") 
-                            || low.contains("acpi") || low.contains("net") || low.contains("init") || low.contains("link") 
-                            || low.contains("driver") || low.contains("scsi") || low.contains("<6>") || low.contains("<5>")
-                        }
-                        LogFilter::Err => {
-                            let low = l.to_lowercase();
-                            low.contains("err") || low.contains("fail") || low.contains("crit") || low.contains("error") 
-                            || low.contains("fault") || low.contains("segfault") || low.contains("oops") || low.contains("denied")
-                            || low.contains("timeout") || low.contains("dead") || low.contains("<3>") || low.contains("<2>") || low.contains("<1>") || low.contains("<0>")
-                        }
-                        LogFilter::Notice => {
-                            let low = l.to_lowercase();
-                            low.contains("notice") || low.contains("note") || low.contains("ready") || low.contains("started") 
-                            || low.contains("version") || low.contains("boot") || low.contains("mount") || low.contains("system")
-                            || low.contains("command line") || low.contains("memory:")
-                        }
-                    };
-                    matches_search && matches_filter
-                })
-                .collect();
-
-            if *auto_scroll && !filtered_lines.is_empty() {
-                if filtered_lines.len() > list_height {
-                    *scroll_y = filtered_lines.len() - list_height;
-                } else {
-                    *scroll_y = 0;
-                }
+            if *auto_scroll {
+                *scroll_y = max_scroll;
+            } else if *scroll_y > max_scroll {
+                *scroll_y = max_scroll;
             }
 
-            let display_items: Vec<ListItem> = filtered_lines
+            let display_items: Vec<ListItem> = view_state.filtered_indices
                 .iter()
                 .skip(*scroll_y)
                 .take(list_height)
-                .map(|l| {
+                .map(|&idx| {
+                    let l = &dmesg_lines[idx];
                     let truncated = if *scroll_x < l.len() {
                         &l[*scroll_x..]
                     } else {
@@ -428,11 +443,23 @@ fn run_app<B: Backend>(
                 "".to_string()
             };
 
+            let start_line = if filtered_count == 0 { 0 } else { *scroll_y + 1 };
+            let end_line = (*scroll_y + list_height).min(filtered_count);
+
             f.render_widget(
                 List::new(display_items).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("Logs ({}) - Shown: {}/{}{}", source_str, filtered_lines.len(), dmesg_lines.len(), title_suffix))
+                        .title(format!(
+                            " Logs ({}) [Filter: {:?}] - Showing lines {}-{} of {} (Total Buffer: {}){}", 
+                            source_str, 
+                            *active_filter,
+                            start_line,
+                            end_line,
+                            filtered_count,
+                            dmesg_lines.len(),
+                            title_suffix
+                        ))
                         .style(Style::default().fg(Color::Cyan))
                 ),
                 chunks[2],
@@ -571,17 +598,10 @@ fn run_app<B: Backend>(
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let filtered_lines: Vec<String> = dmesg_lines
+                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let filtered_lines: Vec<String> = view_state.filtered_indices
                             .iter()
-                            .filter(|l| {
-                                let matches_search = if search.is_empty() {
-                                    true
-                                } else {
-                                    l.to_lowercase().contains(&search.to_lowercase())
-                                };
-                                matches_search
-                            })
-                            .cloned()
+                            .map(|&idx| dmesg_lines[idx].clone())
                             .collect();
                         
                         let timestamp_str = if let Ok(out) = Command::new("date").args(["+%Y-%m-%d_%H-%M"]).output() {
@@ -607,22 +627,16 @@ fn run_app<B: Backend>(
                     }
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         *auto_scroll = false;
-                        if let Some(pos) = dmesg_lines.iter().enumerate().skip(*scroll_y + 1).find(|(_, l)| {
-                            let low = l.to_lowercase();
-                            low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
-                        }) {
-                            *scroll_y = pos.0;
+                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
+                            *scroll_y = pos;
                         }
                     }
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
-                        if *scroll_y > 0 {
-                            if let Some(pos) = dmesg_lines.iter().enumerate().take(*scroll_y).rev().find(|(_, l)| {
-                                let low = l.to_lowercase();
-                                low.contains("warn") || low.contains("err") || low.contains("fail") || low.contains("slow")
-                            }) {
-                                *scroll_y = pos.0;
-                            }
+                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
+                            *scroll_y = pos;
                         }
                     }
                     (_, KeyCode::F(2)) => {
@@ -659,7 +673,9 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::Down) => {
                         *scroll_y += 1;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
+                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        if *scroll_y >= max_scroll {
                             *auto_scroll = true;
                         }
                     }
@@ -669,8 +685,10 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::PageDown) => {
                         *scroll_y += list_height;
-                        if *scroll_y + list_height >= dmesg_lines.len() {
-                            *scroll_y = dmesg_lines.len().saturating_sub(list_height);
+                        let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        if *scroll_y >= max_scroll {
+                            *scroll_y = max_scroll;
                             *auto_scroll = true;
                         }
                     }
@@ -696,7 +714,9 @@ fn run_app<B: Backend>(
                             *scroll_x += 3;
                         } else {
                             *scroll_y += 1;
-                            if *scroll_y + list_height >= dmesg_lines.len() {
+                            let view_state = LogViewState::update(dmesg_lines, search, *active_filter);
+                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                            if *scroll_y >= max_scroll {
                                 *auto_scroll = true;
                             }
                         }
