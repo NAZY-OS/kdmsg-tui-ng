@@ -47,10 +47,9 @@ impl LogViewState {
         }
     }
 
-    // Berechnet die Indizes nur neu, wenn sich die Daten, der Filter oder die Suche geändert haben (Caching-Trick)
     fn update_if_needed(&mut self, lines: &[String], search: &str, filter: LogFilter) {
         if lines.len() == self.last_len && search == self.last_search && filter == self.last_filter {
-            return; // Nichts hat sich geändert -> CPU sparen!
+            return;
         }
 
         self.last_len = lines.len();
@@ -227,7 +226,7 @@ fn format_uptime(seconds: u64) -> String {
     }
 }
 
-fn get_exact_boot_time() -> String {
+fn get_exact_boot_title() -> String {
     if let Ok(content) = std::fs::read_to_string("/proc/stat") {
         for line in content.lines() {
             if line.starts_with("btime ") {
@@ -326,7 +325,7 @@ fn run_app<B: Backend>(
     last_refresh: &mut Instant,
     refresh_interval: Duration,
 ) -> io::Result<()> {
-    let boot_time_str = get_exact_boot_time();
+    let boot_time_str = get_exact_boot_title();
     let gateway_ip = get_default_gateway();
     let mut view_state = LogViewState::new();
 
@@ -354,7 +353,6 @@ fn run_app<B: Backend>(
         sys.refresh_all();
         nets.refresh();
 
-        // Cached Update ausführen (schont enorm die CPU bei jedem Frame)
         view_state.update_if_needed(dmesg_lines, search, *active_filter);
 
         let terminal_size = terminal.size()?;
@@ -488,6 +486,10 @@ fn run_app<B: Backend>(
                 let up_secs = System::uptime();
                 let uptime_str = format_uptime(up_secs);
                 
+                // CPU Gesamtauslastung berechnen
+                let global_cpu = sys.global_cpu_usage();
+                let cpu_bar = render_bar(global_cpu.round() as u64, 100, 15);
+
                 let total_ram = sys.total_memory();
                 let used_ram = sys.used_memory();
                 let ram_bar = render_bar(used_ram, total_ram, 15);
@@ -517,10 +519,11 @@ fn run_app<B: Backend>(
                 };
 
                 let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
+                    "OS: {} | Started: {} | Uptime: {}\nCPU:  {} ({:.1}%)\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
                     distro,
                     boot_time_str,
                     uptime_str,
+                    cpu_bar, global_cpu,
                     ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
                     swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
                     gateway_ip,
@@ -606,142 +609,4 @@ fn run_app<B: Backend>(
                         *show_help_modal = !*show_help_modal;
                     }
                     (_, KeyCode::Esc) => {
-                        if *show_help_modal {
-                            *show_help_modal = false;
-                        } else {
-                            search.clear();
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let filtered_lines: Vec<String> = view_state.filtered_indices
-                            .iter()
-                            .map(|&idx| dmesg_lines[idx].clone())
-                            .collect();
-                        
-                        let timestamp_str = if let Ok(out) = Command::new("date").args(["+%Y-%m-%d_%H-%M"]).output() {
-                            String::from_utf8_lossy(&out.stdout).trim().to_string()
-                        } else {
-                            "unknown-time".to_string()
-                        };
-
-                        let export_path = format!("/var/log/kdmsg_export_{}.log", timestamp_str);
-                        if fs::write(&export_path, filtered_lines.join("\n")).is_ok() {
-                            *export_status = Some(format!("[Saved: {}]", export_path));
-                            *export_timer = Some(Instant::now());
-                        } else {
-                            *export_status = Some("[Export Failed!]".to_string());
-                            *export_timer = Some(Instant::now());
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Up) => {
-                        if *port_scroll > 0 { *port_scroll -= 1; }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Down) => {
-                        *port_scroll += 1;
-                    }
-                    (KeyModifiers::NONE, KeyCode::Tab) => {
-                        *auto_scroll = false;
-                        if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
-                            *scroll_y = pos;
-                        }
-                    }
-                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
-                        *auto_scroll = false;
-                        if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
-                            *scroll_y = pos;
-                        }
-                    }
-                    (_, KeyCode::F(2)) => {
-                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(3)) => {
-                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(4)) => {
-                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(5)) => {
-                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        if !*show_help_modal {
-                            search.push(c);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Backspace) => {
-                        if !*show_help_modal {
-                            search.pop();
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Up) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 { *scroll_y -= 1; }
-                    }
-                    (_, KeyCode::Down) => {
-                        *scroll_y += 1;
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                        if *scroll_y >= max_scroll {
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::PageUp) => {
-                        *auto_scroll = false;
-                        *scroll_y = scroll_y.saturating_sub(list_height);
-                    }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                        if *scroll_y >= max_scroll {
-                            *scroll_y = max_scroll;
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                            if *scroll_y >= max_scroll {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                        if *show_help_
