@@ -37,7 +37,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut dmesg_lines: Vec<String> = Vec::with_capacity(5000);
+    let mut dmesg_lines: Vec<String> = Vec::with_capacity(10000);
     let mut search = String::new();
     let mut scroll_y: usize = 0;
     let mut scroll_x: usize = 0;
@@ -97,7 +97,7 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
-                // Real dmesg ring buffer (includes kernel + userspace logs written to kmsg)
+                // Real dmesg ring buffer (kernel + kmsg userspace logs)
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     let year_regex = Regex::new(r" \d{4}\]").unwrap();
@@ -109,8 +109,8 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
             LogSource::Journalctl => {
-                // Complete systemd journal of the current boot with log level indications
-                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short", "-n", "3000"]).output() {
+                // Extended limit of 8000 lines for the current boot
+                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short", "-n", "8000"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     raw.lines().map(|s| s.to_string()).collect()
                 } else {
