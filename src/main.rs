@@ -486,7 +486,7 @@ fn run_app<B: Backend>(
                 let up_secs = System::uptime();
                 let uptime_str = format_uptime(up_secs);
                 
-                let global_cpu = sys.global_cpu_usage();
+                let global_cpu = sys.global_cpu_info().cpu_usage();
                 let cpu_bar = render_bar(global_cpu.round() as u64, 100, 15);
 
                 let total_ram = sys.total_memory();
@@ -499,17 +499,9 @@ fn run_app<B: Backend>(
 
                 let mut net_info_lines = Vec::new();
                 for (name, data) in nets.iter() {
-                    let ips: Vec<String> = data.ip_networks()
-                        .iter()
-                        .filter(|ip| ip.addr.is_ipv4())
-                        .map(|ip| ip.addr.to_string())
-                        .collect();
-                    let ip_str = if ips.is_empty() { "No IPv4".to_string() } else { ips.join(", ") };
-                    
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
-                    
-                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb, up_kb));
+                    net_info_lines.push(format!("  [NET] {:<8} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, down_kb, up_kb));
                 }
                 let net_display = if net_info_lines.is_empty() {
                     "  No networks found".to_string()
@@ -531,7 +523,7 @@ fn run_app<B: Backend>(
 
                 f.render_widget(
                     Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
+                        Block::default().borders(Borders::ALL).title("System & Network Dashboard").style(Style::default().fg(Color::Cyan))
                     ),
                     chunks[3],
                 );
