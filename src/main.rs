@@ -596,7 +596,7 @@ fn run_app<B: Backend>(
                         }
                     }
                     (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, active_filter);
                         let filtered_lines: Vec<String> = view_state.filtered_indices
                             .iter()
                             .map(|&idx| dmesg_lines[idx].clone())
@@ -625,14 +625,14 @@ fn run_app<B: Backend>(
                     }
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         *auto_scroll = false;
-                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, active_filter);
                         if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
                             *scroll_y = pos;
                         }
                     }
                     (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
                         *auto_scroll = false;
-                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, active_filter);
                         if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
                             *scroll_y = pos;
                         }
@@ -643,7 +643,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::F(3)) => {
                         *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *active_filter = true;
+                        *auto_scroll = true;
                     }
                     (_, KeyCode::F(4)) => {
                         *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
@@ -671,7 +671,7 @@ fn run_app<B: Backend>(
                     }
                     (_, KeyCode::Down) => {
                         *scroll_y += 1;
-                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
+                        let view_state = LogViewState::update(dmesg_lines, search, active_filter);
                         let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                         if *scroll_y >= max_scroll {
                             *auto_scroll = true;
@@ -681,56 +681,4 @@ fn run_app<B: Backend>(
                         *auto_scroll = false;
                         *scroll_y = scroll_y.saturating_sub(list_height);
                     }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                        if *scroll_y >= max_scroll {
-                            *scroll_y = max_scroll;
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            let view_state = LogViewState::update(dmesg_lines, search, &active_filter);
-                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                            if *scroll_y >= max_scroll {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
+                    (_, KeyCode::PageDown
