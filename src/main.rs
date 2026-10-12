@@ -11,6 +11,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use sysinfo::{Networks, System};
 
+const MAX_LOG_LINES: usize = 5000;
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum LogFilter {
     All,
@@ -140,7 +142,7 @@ fn main() -> io::Result<()> {
     let mut nets = Networks::new_with_refreshed_list();
 
     let mut last_refresh = Instant::now();
-    let refresh_interval = Duration::from_secs(2);
+    let refresh_interval = Duration::from_secs(5);
 
     let res = run_app(
         &mut terminal,
@@ -177,7 +179,7 @@ fn main() -> io::Result<()> {
 
 fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
-        let lines = match source {
+        let mut lines = match source {
             LogSource::Dmesg => {
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
@@ -198,6 +200,13 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
         };
+
+        // Bounded Buffer: Max. 5000 Zeilen behalten, um RAM & CPU zu schonen
+        if lines.len() > MAX_LOG_LINES {
+            let start = lines.len() - MAX_LOG_LINES;
+            lines = lines.drain(start..).collect();
+        }
+
         let _ = tx.send(Message::LogsUpdated(lines));
     });
 }
@@ -328,6 +337,7 @@ fn run_app<B: Backend>(
     let boot_time_str = get_exact_boot_title();
     let gateway_ip = get_default_gateway();
     let mut view_state = LogViewState::new();
+    let mut telemetry_timer = Instant::now();
 
     loop {
         if let Some(timer) = *export_timer {
@@ -350,8 +360,12 @@ fn run_app<B: Backend>(
             *last_refresh = Instant::now();
         }
 
-        sys.refresh_all();
-        nets.refresh();
+        if telemetry_timer.elapsed() >= Duration::from_secs(1) {
+            sys.refresh_cpu();
+            sys.refresh_memory();
+            nets.refresh();
+            telemetry_timer = Instant::now();
+        }
 
         view_state.update_if_needed(dmesg_lines, search, *active_filter);
 
@@ -422,320 +436,3 @@ fn run_app<B: Backend>(
                 search.clone()
             };
             let search_color = if search.is_empty() { Color::DarkGray } else { Color::Yellow };
-            f.render_widget(
-                Paragraph::new(search_display)
-                    .style(Style::default().fg(search_color))
-                    .block(Block::default().borders(Borders::ALL).title(" Search Filter ").style(Style::default().fg(Color::LightYellow))),
-                chunks[1],
-            );
-
-            let display_items: Vec<ListItem> = view_state.filtered_indices
-                .iter()
-                .skip(*scroll_y)
-                .take(list_height)
-                .map(|&idx| {
-                    let l = &dmesg_lines[idx];
-                    let truncated = if *scroll_x < l.len() {
-                        &l[*scroll_x..]
-                    } else {
-                        ""
-                    };
-
-                    let lower = l.to_lowercase();
-                    let fg_color = if lower.contains("err") || lower.contains("fail") || lower.contains("crit") || lower.contains("error") || lower.contains("fault") || lower.contains("segfault") || lower.contains("oops") || lower.contains("denied") || lower.contains("<3>") || lower.contains("<2>") || lower.contains("<1>") || lower.contains("<0>") {
-                        Color::Red
-                    } else if lower.contains("warn") || lower.contains("warning") || lower.contains("bad") || lower.contains("degraded") || lower.contains("slow") || lower.contains("bug") || lower.contains("<4>") {
-                        Color::Yellow
-                    } else if lower.contains("info") || lower.contains("usb") || lower.contains("pci") || lower.contains("cpu") || lower.contains("acpi") || lower.contains("net") || lower.contains("registered") || lower.contains("<6>") || lower.contains("<5>") {
-                        Color::Cyan
-                    } else if lower.contains("notice") || lower.contains("note") || lower.contains("ready") || lower.contains("started") || lower.contains("version") || lower.contains("boot") || lower.contains("mount") {
-                        Color::Magenta
-                    } else {
-                        Color::Green
-                    };
-
-                    ListItem::new(truncated).style(Style::default().fg(fg_color).bg(Color::Black))
-                })
-                .collect();
-            
-            let title_suffix = if let Some(ref msg) = export_status {
-                format!(" | {} ", msg)
-            } else {
-                "".to_string()
-            };
-
-            f.render_widget(
-                List::new(display_items).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!(
-                            " Logs Viewer [Active Filter: {:?}] {}", 
-                            *active_filter,
-                            title_suffix
-                        ))
-                        .style(Style::default().fg(Color::Cyan))
-                ),
-                chunks[2],
-            );
-
-            if *show_info_panel && chunks.len() > 3 {
-                let os_name = System::name().unwrap_or_else(|| "Linux".to_string());
-                let os_ver = System::os_version().unwrap_or_default();
-                let distro = format!("{} {}", os_name, os_ver);
-                
-                let up_secs = System::uptime();
-                let uptime_str = format_uptime(up_secs);
-                
-                let global_cpu = sys.global_cpu_info().cpu_usage();
-                let cpu_bar = render_bar(global_cpu.round() as u64, 100, 15);
-
-                let total_ram = sys.total_memory();
-                let used_ram = sys.used_memory();
-                let ram_bar = render_bar(used_ram, total_ram, 15);
-
-                let total_swap = sys.total_swap();
-                let used_swap = sys.used_swap();
-                let swap_bar = render_bar(used_swap, total_swap, 15);
-
-                let mut net_info_lines = Vec::new();
-                for (name, data) in nets.iter() {
-                    let down_kb = data.received() / 1024;
-                    let up_kb = data.transmitted() / 1024;
-                    net_info_lines.push(format!("  [NET] {:<8} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, down_kb, up_kb));
-                }
-                let net_display = if net_info_lines.is_empty() {
-                    "  No networks found".to_string()
-                } else {
-                    net_info_lines.join("\n")
-                };
-
-                let sys_info_text = format!(
-                    "OS: {} | Started: {} | Uptime: {}\nCPU:  {} ({:.1}%)\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
-                    distro,
-                    boot_time_str,
-                    uptime_str,
-                    cpu_bar, global_cpu,
-                    ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
-                    swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
-                    gateway_ip,
-                    net_display
-                );
-
-                f.render_widget(
-                    Paragraph::new(sys_info_text).block(
-                        Block::default().borders(Borders::ALL).title("System & Network Dashboard").style(Style::default().fg(Color::Cyan))
-                    ),
-                    chunks[3],
-                );
-
-                let ports_vec = get_clean_listening_ports();
-                let ports_items: Vec<ListItem> = ports_vec
-                    .iter()
-                    .skip(*port_scroll)
-                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
-                    .collect();
-
-                f.render_widget(
-                    List::new(ports_items).block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(format!("Listening IPv4 Ports with Process/PID (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
-                            .style(Style::default().fg(Color::Cyan))
-                    ),
-                    chunks[4],
-                );
-            }
-
-            if *show_help_modal {
-                let area = f.size();
-                let popup_width = 64.min(area.width.saturating_sub(4));
-                let popup_height = 16.min(area.height.saturating_sub(4));
-                let popup_area = Rect {
-                    x: (area.width.saturating_sub(popup_width)) / 2,
-                    y: (area.height.saturating_sub(popup_height)) / 2,
-                    width: popup_width,
-                    height: popup_height,
-                };
-
-                let help_text = vec![
-                    Line::from(Span::styled(" KDMSG-TUI-NG HELP & SHORTCUTS ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-                    Line::from(""),
-                    Line::from(vec![Span::styled(" Ctrl + q        ", Style::default().fg(Color::Green)), Span::raw(": Quit application")]),
-                    Line::from(vec![Span::styled(" Ctrl + j        ", Style::default().fg(Color::Green)), Span::raw(": Toggle log source (dmesg / journalctl)")]),
-                    Line::from(vec![Span::styled(" Ctrl + a        ", Style::default().fg(Color::Green)), Span::raw(": Toggle auto-scroll")]),
-                    Line::from(vec![Span::styled(" Ctrl + i        ", Style::default().fg(Color::Green)), Span::raw(": Toggle info panel")]),
-                    Line::from(vec![Span::styled(" Ctrl + s        ", Style::default().fg(Color::Green)), Span::raw(": Export filtered logs")]),
-                    Line::from(vec![Span::styled(" F1 / Ctrl + h   ", Style::default().fg(Color::Green)), Span::raw(": Toggle help screen")]),
-                    Line::from(vec![Span::styled(" F2..F5          ", Style::default().fg(Color::Green)), Span::raw(": Filter presets (Warn, Info, Err, Notice")]),
-                    Line::from(vec![Span::styled(" Tab / Shift+Tab ", Style::default().fg(Color::Green)), Span::raw(": Jump next / previous warning")]),
-                ];
-                let help_paragraph = Paragraph::new(help_text)
-                    .style(Style::default().fg(Color::White).bg(Color::Blue))
-                    .block(Block::default().borders(Borders::ALL).title(" Help ").style(Style::default().fg(Color::White).bg(Color::Blue)))
-                    .alignment(Alignment::Left);
-                
-                f.render_widget(Clear, popup_area);
-                f.render_widget(help_paragraph, popup_area);
-            }
-        })?;
-
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(k) => match (k.modifiers, k.code) {
-                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
-                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
-                        *log_source = match *log_source {
-                            LogSource::Dmesg => LogSource::Journalctl,
-                            LogSource::Journalctl => LogSource::Dmesg,
-                        };
-                        spawn_log_fetcher(tx.clone(), *log_source);
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
-                        *auto_scroll = !*auto_scroll;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
-                        *show_info_panel = !*show_info_panel;
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
-                        *show_help_modal = !*show_help_modal;
-                    }
-                    (_, KeyCode::Esc) => {
-                        if *show_help_modal {
-                            *show_help_modal = false;
-                        } else {
-                            search.clear();
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                        let filtered_lines: Vec<String> = view_state.filtered_indices
-                            .iter()
-                            .map(|&idx| dmesg_lines[idx].clone())
-                            .collect();
-                        
-                        let timestamp_str = if let Ok(out) = Command::new("date").args(["+%Y-%m-%d_%H-%M"]).output() {
-                            String::from_utf8_lossy(&out.stdout).trim().to_string()
-                        } else {
-                            "unknown-time".to_string()
-                        };
-
-                        let export_path = format!("/var/log/kdmsg_export_{}.log", timestamp_str);
-                        if fs::write(&export_path, filtered_lines.join("\n")).is_ok() {
-                            *export_status = Some(format!("[Saved: {}]", export_path));
-                            *export_timer = Some(Instant::now());
-                        } else {
-                            *export_status = Some("[Export Failed!]".to_string());
-                            *export_timer = Some(Instant::now());
-                        }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Up) => {
-                        if *port_scroll > 0 { *port_scroll -= 1; }
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Down) => {
-                        *port_scroll += 1;
-                    }
-                    (KeyModifiers::NONE, KeyCode::Tab) => {
-                        *auto_scroll = false;
-                        if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
-                            *scroll_y = pos;
-                        }
-                    }
-                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
-                        *auto_scroll = false;
-                        if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
-                            *scroll_y = pos;
-                        }
-                    }
-                    (_, KeyCode::F(2)) => {
-                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(3)) => {
-                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(4)) => {
-                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::F(5)) => {
-                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
-                        *auto_scroll = true;
-                    }
-                    (_, KeyCode::Char(c)) => {
-                        if !*show_help_modal {
-                            search.push(c);
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Backspace) => {
-                        if !*show_help_modal {
-                            search.pop();
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Up) => {
-                        *auto_scroll = false;
-                        if *scroll_y > 0 { *scroll_y -= 1; }
-                    }
-                    (_, KeyCode::Down) => {
-                        *scroll_y += 1;
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                        if *scroll_y >= max_scroll {
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::PageUp) => {
-                        *auto_scroll = false;
-                        *scroll_y = scroll_y.saturating_sub(list_height);
-                    }
-                    (_, KeyCode::PageDown) => {
-                        *scroll_y += list_height;
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                        if *scroll_y >= max_scroll {
-                            *scroll_y = max_scroll;
-                            *auto_scroll = true;
-                        }
-                    }
-                    (_, KeyCode::Left) => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    (_, KeyCode::Right) => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x = scroll_x.saturating_sub(3);
-                        } else {
-                            *auto_scroll = false;
-                            if *scroll_y > 0 { *scroll_y -= 1; }
-                        }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        if m.modifiers.contains(KeyModifiers::ALT) {
-                            *scroll_x += 3;
-                        } else {
-                            *scroll_y += 1;
-                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
-                            if *scroll_y >= max_scroll {
-                                *auto_scroll = true;
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollLeft => {
-                        *scroll_x = scroll_x.saturating_sub(3);
-                    }
-                    MouseEventKind::ScrollRight => {
-                        *scroll_x += 3;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
