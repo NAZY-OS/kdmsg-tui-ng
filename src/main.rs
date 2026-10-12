@@ -509,4 +509,241 @@ fn run_app<B: Backend>(
                     let down_kb = data.received() / 1024;
                     let up_kb = data.transmitted() / 1024;
                     
-                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb
+                    net_info_lines.push(format!("  [NET] {:<8} | IP: {:<15} | ↓ {:>4} KB/s  ↑ {:>4} KB/s", name, ip_str, down_kb, up_kb));
+                }
+                let net_display = if net_info_lines.is_empty() {
+                    "  No networks found".to_string()
+                } else {
+                    net_info_lines.join("\n")
+                };
+
+                let sys_info_text = format!(
+                    "OS: {} | Started: {} | Uptime: {}\nCPU:  {} ({:.1}%)\nRAM:  {} ({}/{}) MB | Swap: {} ({}/{}) MB\nGateway (IPv4): {}\n{}",
+                    distro,
+                    boot_time_str,
+                    uptime_str,
+                    cpu_bar, global_cpu,
+                    ram_bar, used_ram / 1024 / 1024, total_ram / 1024 / 1024,
+                    swap_bar, used_swap / 1024 / 1024, total_swap / 1024 / 1024,
+                    gateway_ip,
+                    net_display
+                );
+
+                f.render_widget(
+                    Paragraph::new(sys_info_text).block(
+                        Block::default().borders(Borders::ALL).title("System & Network Dashboard (IPv4 Only)").style(Style::default().fg(Color::Cyan))
+                    ),
+                    chunks[3],
+                );
+
+                let ports_vec = get_clean_listening_ports();
+                let ports_items: Vec<ListItem> = ports_vec
+                    .iter()
+                    .skip(*port_scroll)
+                    .map(|p| ListItem::new(p.as_str()).style(Style::default().fg(Color::LightCyan)))
+                    .collect();
+
+                f.render_widget(
+                    List::new(ports_items).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Listening IPv4 Ports with Process/PID (Ctrl+↑/↓ - Total: {})", ports_vec.len()))
+                            .style(Style::default().fg(Color::Cyan))
+                    ),
+                    chunks[4],
+                );
+            }
+
+            if *show_help_modal {
+                let area = f.size();
+                let popup_width = 64.min(area.width.saturating_sub(4));
+                let popup_height = 16.min(area.height.saturating_sub(4));
+                let popup_area = Rect {
+                    x: (area.width.saturating_sub(popup_width)) / 2,
+                    y: (area.height.saturating_sub(popup_height)) / 2,
+                    width: popup_width,
+                    height: popup_height,
+                };
+
+                let help_text = vec![
+                    Line::from(Span::styled(" KDMSG-TUI-NG HELP & SHORTCUTS ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+                    Line::from(""),
+                    Line::from(vec![Span::styled(" Ctrl + q        ", Style::default().fg(Color::Green)), Span::raw(": Quit application")]),
+                    Line::from(vec![Span::styled(" Ctrl + j        ", Style::default().fg(Color::Green)), Span::raw(": Toggle log source (dmesg / journalctl)")]),
+                    Line::from(vec![Span::styled(" Ctrl + a        ", Style::default().fg(Color::Green)), Span::raw(": Toggle auto-scroll")]),
+                    Line::from(vec![Span::styled(" Ctrl + i        ", Style::default().fg(Color::Green)), Span::raw(": Toggle info panel")]),
+                    Line::from(vec![Span::styled(" Ctrl + s        ", Style::default().fg(Color::Green)), Span::raw(": Export filtered logs")]),
+                    Line::from(vec![Span::styled(" F1 / Ctrl + h   ", Style::default().fg(Color::Green)), Span::raw(": Toggle help screen")]),
+                    Line::from(vec![Span::styled(" F2..F5          ", Style::default().fg(Color::Green)), Span::raw(": Filter presets (Warn, Info, Err, Notice")]),
+                    Line::from(vec![Span::styled(" Tab / Shift+Tab ", Style::default().fg(Color::Green)), Span::raw(": Jump next / previous warning")]),
+                ];
+                let help_paragraph = Paragraph::new(help_text)
+                    .style(Style::default().fg(Color::White).bg(Color::Blue))
+                    .block(Block::default().borders(Borders::ALL).title(" Help ").style(Style::default().fg(Color::White).bg(Color::Blue)))
+                    .alignment(Alignment::Left);
+                
+                f.render_widget(Clear, popup_area);
+                f.render_widget(help_paragraph, popup_area);
+            }
+        })?;
+
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(k) => match (k.modifiers, k.code) {
+                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => break,
+                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => {
+                        *log_source = match *log_source {
+                            LogSource::Dmesg => LogSource::Journalctl,
+                            LogSource::Journalctl => LogSource::Dmesg,
+                        };
+                        spawn_log_fetcher(tx.clone(), *log_source);
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                        *auto_scroll = !*auto_scroll;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
+                        *show_info_panel = !*show_info_panel;
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
+                        *show_help_modal = !*show_help_modal;
+                    }
+                    (_, KeyCode::Esc) => {
+                        if *show_help_modal {
+                            *show_help_modal = false;
+                        } else {
+                            search.clear();
+                        }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                        let filtered_lines: Vec<String> = view_state.filtered_indices
+                            .iter()
+                            .map(|&idx| dmesg_lines[idx].clone())
+                            .collect();
+                        
+                        let timestamp_str = if let Ok(out) = Command::new("date").args(["+%Y-%m-%d_%H-%M"]).output() {
+                            String::from_utf8_lossy(&out.stdout).trim().to_string()
+                        } else {
+                            "unknown-time".to_string()
+                        };
+
+                        let export_path = format!("/var/log/kdmsg_export_{}.log", timestamp_str);
+                        if fs::write(&export_path, filtered_lines.join("\n")).is_ok() {
+                            *export_status = Some(format!("[Saved: {}]", export_path));
+                            *export_timer = Some(Instant::now());
+                        } else {
+                            *export_status = Some("[Export Failed!]".to_string());
+                            *export_timer = Some(Instant::now());
+                        }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Up) => {
+                        if *port_scroll > 0 { *port_scroll -= 1; }
+                    }
+                    (KeyModifiers::CONTROL, KeyCode::Down) => {
+                        *port_scroll += 1;
+                    }
+                    (KeyModifiers::NONE, KeyCode::Tab) => {
+                        *auto_scroll = false;
+                        if let Some(&pos) = view_state.filtered_indices.iter().find(|&&idx| idx > *scroll_y) {
+                            *scroll_y = pos;
+                        }
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::CONTROL, KeyCode::BackTab) => {
+                        *auto_scroll = false;
+                        if let Some(&pos) = view_state.filtered_indices.iter().rev().find(|&&idx| idx < *scroll_y) {
+                            *scroll_y = pos;
+                        }
+                    }
+                    (_, KeyCode::F(2)) => {
+                        *active_filter = if *active_filter == LogFilter::Warn { LogFilter::All } else { LogFilter::Warn };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(3)) => {
+                        *active_filter = if *active_filter == LogFilter::Info { LogFilter::All } else { LogFilter::Info };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(4)) => {
+                        *active_filter = if *active_filter == LogFilter::Err { LogFilter::All } else { LogFilter::Err };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::F(5)) => {
+                        *active_filter = if *active_filter == LogFilter::Notice { LogFilter::All } else { LogFilter::Notice };
+                        *auto_scroll = true;
+                    }
+                    (_, KeyCode::Char(c)) => {
+                        if !*show_help_modal {
+                            search.push(c);
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Backspace) => {
+                        if !*show_help_modal {
+                            search.pop();
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Up) => {
+                        *auto_scroll = false;
+                        if *scroll_y > 0 { *scroll_y -= 1; }
+                    }
+                    (_, KeyCode::Down) => {
+                        *scroll_y += 1;
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        if *scroll_y >= max_scroll {
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::PageUp) => {
+                        *auto_scroll = false;
+                        *scroll_y = scroll_y.saturating_sub(list_height);
+                    }
+                    (_, KeyCode::PageDown) => {
+                        *scroll_y += list_height;
+                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                        if *scroll_y >= max_scroll {
+                            *scroll_y = max_scroll;
+                            *auto_scroll = true;
+                        }
+                    }
+                    (_, KeyCode::Left) => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    (_, KeyCode::Right) => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x = scroll_x.saturating_sub(3);
+                        } else {
+                            *auto_scroll = false;
+                            if *scroll_y > 0 { *scroll_y -= 1; }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if m.modifiers.contains(KeyModifiers::ALT) {
+                            *scroll_x += 3;
+                        } else {
+                            *scroll_y += 1;
+                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                            if *scroll_y >= max_scroll {
+                                *auto_scroll = true;
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollLeft => {
+                        *scroll_x = scroll_x.saturating_sub(3);
+                    }
+                    MouseEventKind::ScrollRight => {
+                        *scroll_x += 3;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
