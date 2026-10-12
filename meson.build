@@ -5,15 +5,7 @@ install_data(
   'target/release/kdmsg-tui-ng',
   install_dir: '/sbin',
   rename: 'kdmsg-tui-ng',
-  install_mode: 'rwxr-xr-x'
-)
-
-# Install to /usr/bin for regular users
-install_data(
-  'target/release/kdmsg-tui-ng',
-  install_dir: '/usr/bin',
-  rename: 'kdmsg-tui-ng',
-  install_mode: 'rwxr-xr-x'
+  install_mode: 'rwxr-xr-xr'
 )
 
 # Install the systemd service file
