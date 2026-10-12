@@ -1,9 +1,17 @@
-project('kdmsg-tui-ng', version: '1.0.0')
+project('kdmsg-tui-ng', version: '1.3')
 
-# Install the pre-compiled Cargo binary directly to /sbin
+# Install to /sbin for system administrators
 install_data(
   'target/release/kdmsg-tui-ng',
   install_dir: '/sbin',
+  rename: 'kdmsg-tui-ng',
+  install_mode: 'rwxr-xr-x'
+)
+
+# Install to /usr/bin for regular users
+install_data(
+  'target/release/kdmsg-tui-ng',
+  install_dir: '/usr/bin',
   rename: 'kdmsg-tui-ng',
   install_mode: 'rwxr-xr-x'
 )
