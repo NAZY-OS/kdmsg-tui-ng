@@ -363,8 +363,8 @@ fn run_app<B: Backend>(
 
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
-                LogSource::Dmesg => "dmesg (ring buffer)",
-                LogSource::Journalctl => "journalctl (all)",
+                LogSource::Dmesg => "dmesg",
+                LogSource::Journalctl => "journalctl",
             };
 
             let f2_label = if *active_filter == LogFilter::Warn { "[F2:WARN*]" } else { "F2:Warn" };
@@ -373,13 +373,26 @@ fn run_app<B: Backend>(
             let f5_label = if *active_filter == LogFilter::Notice { "[F5:NOTICE*]" } else { "F5:Notice" };
             let all_label = if *active_filter == LogFilter::All { "[ALL]" } else { "All" };
 
+            let view_state = LogViewState::update(dmesg_lines, search, active_filter);
+            let filtered_count = view_state.filtered_indices.len();
+            let max_scroll = filtered_count.saturating_sub(list_height);
+
+            if *auto_scroll {
+                *scroll_y = max_scroll;
+            } else if *scroll_y > max_scroll {
+                *scroll_y = max_scroll;
+            }
+
+            let start_line = if filtered_count == 0 { 0 } else { *scroll_y + 1 };
+            let end_line = (*scroll_y + list_height).min(filtered_count);
+
             let top_text = format!(
-                "Source: {} | Filters: {} {} {} {} {} | Auto: {} | [Ctrl+q]uit [Ctrl+j]source [Ctrl+s]export [F1]help",
-                source_str, all_label, f2_label, f3_label, f4_label, f5_label, auto_status
+                "Source: {} | Showing: {}-{} of {} matches (Total: {}) | Filters: {} {} {} {} {} | Auto: {}",
+                source_str, start_line, end_line, filtered_count, dmesg_lines.len(), all_label, f2_label, f3_label, f4_label, f5_label, auto_status
             );
             f.render_widget(
                 Paragraph::new(top_text)
-                    .block(Block::default().borders(Borders::ALL).title("Control Panel").style(Style::default().fg(Color::Cyan))),
+                    .block(Block::default().borders(Borders::ALL).title("Control Panel & Counters").style(Style::default().fg(Color::Cyan))),
                 chunks[0],
             );
 
@@ -395,16 +408,6 @@ fn run_app<B: Backend>(
                     .block(Block::default().borders(Borders::ALL).title(" Search Filter ").style(Style::default().fg(Color::LightYellow))),
                 chunks[1],
             );
-
-            let view_state = LogViewState::update(dmesg_lines, search, active_filter);
-            let filtered_count = view_state.filtered_indices.len();
-            let max_scroll = filtered_count.saturating_sub(list_height);
-
-            if *auto_scroll {
-                *scroll_y = max_scroll;
-            } else if *scroll_y > max_scroll {
-                *scroll_y = max_scroll;
-            }
 
             let display_items: Vec<ListItem> = view_state.filtered_indices
                 .iter()
@@ -441,21 +444,13 @@ fn run_app<B: Backend>(
                 "".to_string()
             };
 
-            let start_line = if filtered_count == 0 { 0 } else { *scroll_y + 1 };
-            let end_line = (*scroll_y + list_height).min(filtered_count);
-
             f.render_widget(
                 List::new(display_items).block(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(format!(
-                            " Logs [{}] | Filter: {:?} | Showing {}-{} of {} matches | Total: {} lines{}", 
-                            source_str, 
+                            " Logs Viewer [Active Filter: {:?}] {}", 
                             *active_filter,
-                            start_line,
-                            end_line,
-                            filtered_count,
-                            dmesg_lines.len(),
                             title_suffix
                         ))
                         .style(Style::default().fg(Color::Cyan))
@@ -713,7 +708,7 @@ fn run_app<B: Backend>(
                         } else {
                             *scroll_y += 1;
                             let view_state = LogViewState::update(dmesg_lines, search, active_filter);
-                        let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
+                            let max_scroll = view_state.filtered_indices.len().saturating_sub(list_height);
                             if *scroll_y >= max_scroll {
                                 *auto_scroll = true;
                             }
