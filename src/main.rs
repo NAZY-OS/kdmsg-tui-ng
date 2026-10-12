@@ -97,6 +97,7 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
     std::thread::spawn(move || {
         let lines = match source {
             LogSource::Dmesg => {
+                // Real dmesg ring buffer (includes kernel + userspace logs written to kmsg)
                 if let Ok(out) = Command::new("dmesg").args(["-T"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     let year_regex = Regex::new(r" \d{4}\]").unwrap();
@@ -108,7 +109,8 @@ fn spawn_log_fetcher(tx: std::sync::mpsc::Sender<Message>, source: LogSource) {
                 }
             }
             LogSource::Journalctl => {
-                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short-iso", "-n", "2000"]).output() {
+                // Complete systemd journal of the current boot with log level indications
+                if let Ok(out) = Command::new("journalctl").args(["-b", "-o", "short", "-n", "3000"]).output() {
                     let raw = String::from_utf8_lossy(&out.stdout);
                     raw.lines().map(|s| s.to_string()).collect()
                 } else {
@@ -275,20 +277,20 @@ fn run_app<B: Backend>(
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Min(6),
-                    Constraint::Length(7),
-                    Constraint::Length(5),
+                    Constraint::Length(3), // Control Panel
+                    Constraint::Length(3), // Search Bar
+                    Constraint::Min(6),    // Logs
+                    Constraint::Length(7), // Dashboard
+                    Constraint::Length(5), // Ports
                 ])
                 .split(terminal_size)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Min(6),
+                    Constraint::Length(3), // Control Panel
+                    Constraint::Length(3), // Search Bar
+                    Constraint::Min(6),    // Logs
                 ])
                 .split(terminal_size)
         };
@@ -299,8 +301,8 @@ fn run_app<B: Backend>(
 
             let auto_status = if *auto_scroll { "ON" } else { "OFF" };
             let source_str = match log_source {
-                LogSource::Dmesg => "dmesg",
-                LogSource::Journalctl => "journalctl",
+                LogSource::Dmesg => "dmesg (ring buffer)",
+                LogSource::Journalctl => "journalctl (all)",
             };
 
             let f2_label = if *active_filter == LogFilter::Warn { "[F2:WARN*]" } else { "F2:Warn" };
