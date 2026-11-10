@@ -3,23 +3,21 @@ project('kdmsg-tui-ng', 'rust',
   default_options: ['buildtype=release']
 )
 
-# Build the Rust executable (managed by Cargo)
-executable(
-  'kdmsg-tui-ng',
-  sources: ['src/main.rs'],
-  install: true
-)
+# This meson.build only handles installation, not building
+# (since your build.sh handles all Cargo operations)
 
-# Install binary to /usr/local/bin
+# Install the binary (which will be built by build.sh)
 install_data(
-  get_option('bindir') / 'kdmsg-tui-ng',
+  'target/release/kdmsg-tui-ng',  # Path to your pre-built binary
   install_dir: '/usr/local/bin',
+  rename: 'kdmsg-tui-ng',
   install_mode: 'rwxr-xr-x'
 )
 
-# Install systemd service
+# Install the systemd service file
 install_data(
   'service/kdmsg-tui.service',
   install_dir: '/etc/systemd/system',
   install_mode: 'rw-r--r--'
 )
+
