@@ -9,7 +9,7 @@ project('kdmsg-tui-ng', 'rust',
 # Install the binary (which will be built by build.sh)
 install_data(
   'target/release/kdmsg-tui-ng',  # Path to your pre-built binary
-  install_dir: '/usr/local/bin',
+  install_dir: '/sbin',
   rename: 'kdmsg-tui-ng',
   install_mode: 'rwxr-xr-x'
 )
