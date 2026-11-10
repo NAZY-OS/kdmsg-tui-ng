@@ -139,21 +139,21 @@ main() {
     echo "Program is available at:"
     echo "./target/release/$program_name"
 
-    # Installation nach /sbin
+    # Installation nach /sbin (NUR /sbin, nicht /usr/local/bin)
     echo
     echo "Installing binary to /sbin..."
     sudo cp "target/release/$program_name" "/sbin/$program_name"
     sudo chmod 755 "/sbin/$program_name"
 
-    # Installation der systemd-Service-Datei
+    # Service-Datei nach /lib/systemd/system/ installieren
     echo
     echo "Installing systemd service..."
     sudo cp "service/kdmsg-tui.service" "/lib/systemd/system/"
     sudo chmod 644 "/lib/systemd/system/kdmsg-tui.service"
 
-    # systemd neu laden
+    # systemd neu laden und Service aktivieren
     echo
-    echo "Reloading systemd..."
+    echo "Reloading systemd and enabling service..."
     sudo systemctl daemon-reload
     sudo systemctl enable --now kdmsg-tui.service
 
@@ -162,7 +162,7 @@ main() {
         ""|y|Y|yes|YES)
             echo
             echo "Starting program..."
-            "$program_name"
+            sudo "$program_name"  # Als root ausführen
             ;;
         n|N|no|NO)
             echo "Program was not started."
