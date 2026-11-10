@@ -39,6 +39,7 @@
 
 4. Install the system service:
    ```sh
+   sudo meson install -C build --only-changed
    sudo systemctl daemon-reload
    sudo systemctl enable --now kdmsg-tui.service
    ```
