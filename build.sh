@@ -26,35 +26,23 @@ run_cargo_build() {
     cat "$output_file"
     cat "$error_file"
 
-    # Always create a log when the build fails.
     if [[ "$build_status" -ne 0 ]]; then
         cat "$output_file" "$error_file" > "$log_file"
-
         echo
         echo "Build failed with exit code $build_status."
         echo "Build output was saved to:"
         echo "./$log_file"
-
         rm -f "$output_file" "$error_file"
         return "$build_status"
     fi
 
-    # Check stderr for warnings, errors, and other relevant messages.
-    if grep -Eiq \
-        'warning|warn:|error|error:|failed|failure|deprecated|unused|invalid|missing|unresolved|denied' \
-        "$error_file"; then
-
+    if grep -Eiq 'warning|warn:|error|error:|failed|failure|deprecated|unused|invalid|missing|unresolved|denied' "$error_file"; then
         echo
         echo "Warnings or other relevant messages were detected."
-
-        read -r -p \
-            "Save this output to $log_file? Type yes/no (Enter = yes): " \
-            answer
-
+        read -r -p "Save this output to $log_file? Type yes/no (Enter = yes): " answer
         case "$answer" in
             ""|y|Y|yes|YES)
                 cat "$output_file" "$error_file" > "$log_file"
-
                 echo
                 echo "Build output was saved to:"
                 echo "./$log_file"
@@ -69,7 +57,6 @@ run_cargo_build() {
     fi
 
     rm -f "$output_file" "$error_file"
-
     return 0
 }
 
@@ -82,18 +69,15 @@ main() {
         return 1
     fi
 
-    # Determine the package name from Cargo.toml.
     program_name="$(
         awk '
             /^\[package\]/ {
                 in_package = 1
                 next
             }
-
             /^\[/ && in_package {
                 exit
             }
-
             in_package && /^[[:space:]]*name[[:space:]]*=/ {
                 sub(/^[^"]*"/, "")
                 sub(/".*$/, "")
@@ -106,22 +90,18 @@ main() {
     if [[ -z "$program_name" ]]; then
         echo "Error: Could not determine the package name from Cargo.toml."
         return 1
-    fi
+ fi
 
     echo "Package name: $program_name"
     echo
     cat Cargo.toml
     echo
 
-    read -r -p \
-        "Run cargo update? Type yes/no (Enter = no): " \
-        answer
-
+    read -r -p "Run cargo update? Type yes/no (Enter = no): " answer
     case "$answer" in
         y|Y|yes|YES)
             echo
             echo "Running cargo update..."
-
             if ! cargo update; then
                 echo "Error: cargo update failed."
                 return 1
@@ -135,7 +115,6 @@ main() {
             ;;
     esac
 
-    # Regular test build.
     if ! run_cargo_build "" "compile-error.out.log"; then
         return 1
     fi
@@ -143,7 +122,6 @@ main() {
     echo
     echo "Test build completed successfully."
 
-    # Release build.
     if ! run_cargo_build "--release" "to-fix.out.log"; then
         return 1
     fi
@@ -161,11 +139,21 @@ main() {
     echo "Program is available at:"
     echo "./target/release/$program_name"
 
+    # ADDITION: Meson installation after successful build
     echo
-    read -r -p \
-        "Run the program? Type yes/no (Enter = yes): " \
-        answer
+    echo "Installing with Meson..."
+    if [[ ! -d "build" ]]; then
+        meson setup build
+    fi
+    sudo meson install -C build --only-changed
 
+    # ADDITION: systemd service handling
+    echo
+    echo "Reloading systemd..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now kdmsg-tui.service
+
+    read -r -p "Run the program? Type yes/no (Enter = yes): " answer
     case "$answer" in
         ""|y|Y|yes|YES)
             echo
