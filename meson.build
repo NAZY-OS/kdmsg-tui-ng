@@ -3,31 +3,26 @@ project('kdmsg-tui-ng', 'rust',
   default_options: ['buildtype=release']
 )
 
-# Rust-specific configuration
-rust = import('rust')
+# Rust executable (if you want Meson to build it)
 executable(
   'kdmsg-tui-ng',
   sources: ['src/main.rs'],
   dependencies: [
-    # Add your Rust dependencies here
-    # rust.find_crate('some_crate', version: '>=1.0.0'),
+    # Add your Rust dependencies here (e.g., rust.find_crate('serde', version: '>=1.0.0'))
   ],
   install: true
 )
 
-# Install to /sbin for system administrators
+# Install pre-built binary (if you prefer to use the existing binary)
 install_data(
-  get_option('bindir') / 'kdmsg-tui-ng',
+  'target/release/kdmsg-tui-ng',  # Relative path to the pre-built binary
   install_dir: '/sbin',
   rename: 'kdmsg-tui-ng',
   install_mode: 'rwxr-xr-x'
 )
 
-# Install the systemd service file
+# Install systemd service file
 install_data(
   'service/kdmsg-tui.service',
   install_dir: '/lib/systemd/system'
 )
-
-# Optional: Install man page if you have one
-# install_man('man/kdmsg-tui-ng.1')
