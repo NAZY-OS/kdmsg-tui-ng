@@ -44,17 +44,6 @@
    sudo systemctl enable --now kdmsg-tui.service
    ```
 
-### Manual Installation (Alternative)
-
-If you prefer to build manually:
-
-```sh
-meson setup build
-sudo meson install -C build
-sudo systemctl daemon-reload
-sudo systemctl enable --now kdmsg-tui.service
-```
-
 ## Usage
 
 - Launch the application with: `kdmsg-tui-ng`
