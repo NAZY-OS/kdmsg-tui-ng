@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -e  # Beendet bei Fehlern sofort
 
 run_cargo_build() {
     local build_type="$1"
@@ -65,110 +66,97 @@ main() {
     local answer
 
     if [[ ! -f "Cargo.toml" ]]; then
-        echo "Error: Cargo.toml was not found."
+        echo "Error: Cargo.toml not found!"
         return 1
     fi
 
-    program_name="$(
-        awk '
-            /^\[package\]/ {
-                in_package = 1
-                next
-            }
-            /^\[/ && in_package {
-                exit
-            }
-            in_package && /^[[:space:]]*name[[:space:]]*=/ {
-                sub(/^[^"]*"/, "")
-                sub(/".*$/, "")
-                print
-                exit
-            }
-        ' Cargo.toml
-    )"
+    # Paketnamen extrahieren
+    program_name=$(awk '
+        /^\[package\]/ { in_package=1; next }
+        /^\[/ && in_package { exit }
+        in_package && /^[[:space:]]*name[[:space:]]*=/ {
+            sub(/^[^"]*"/, "")
+            sub(/".*$/, "")
+            print
+            exit
+        }
+    ' Cargo.toml)
 
     if [[ -z "$program_name" ]]; then
-        echo "Error: Could not determine the package name from Cargo.toml."
+        echo "Error: Could not determine package name!"
         return 1
     fi
 
     echo "Package name: $program_name"
     echo
-    cat Cargo.toml
-    echo
 
-    read -r -p "Run cargo update? Type yes/no (Enter = no): " answer
+    # Cargo Update
+    read -p "Run cargo update? [y/N] " answer
     case "$answer" in
-        y|Y|yes|YES)
-            echo
+        [yY]|[yY][eE][sS])
             echo "Running cargo update..."
-            if ! cargo update; then
-                echo "Error: cargo update failed."
-                return 1
-            fi
-            ;;
-        ""|n|N|no|NO)
-            echo "Skipping cargo update."
+            cargo update || { echo "Error: cargo update failed"; return 1; }
             ;;
         *)
-            echo "Invalid answer. Skipping cargo update."
+            echo "Skipping cargo update."
             ;;
     esac
 
+    # Test Build
     if ! run_cargo_build "" "compile-error.out.log"; then
         return 1
     fi
-
-    echo
     echo "Test build completed successfully."
 
+    # Release Build
     if ! run_cargo_build "--release" "to-fix.out.log"; then
         return 1
     fi
 
+    # Binary prüfen
     if [[ ! -f "target/release/$program_name" ]]; then
-        echo
-        echo "Error: Release binary was not found:"
-        echo "./target/release/$program_name"
+        echo "Error: Binary not found at target/release/$program_name"
         return 1
     fi
 
     chmod +x "target/release/$program_name"
 
+    # INSTALLATION NACH /sbin (GARANTIERT)
     echo
-    echo "Program is available at:"
-    echo "./target/release/$program_name"
-
-    # Installation nach /sbin (NUR /sbin, nicht /usr/local/bin)
-    echo
-    echo "Installing binary to /sbin..."
+    echo "=== INSTALLING TO /sbin ==="
+    echo "Copying binary to /sbin/$program_name..."
     sudo cp "target/release/$program_name" "/sbin/$program_name"
     sudo chmod 755 "/sbin/$program_name"
 
-    # Service-Datei nach /lib/systemd/system/ installieren
+    # Überprüfen ob Installation erfolgreich war
+    if [[ ! -f "/sbin/$program_name" ]]; then
+        echo "ERROR: Installation to /sbin failed!"
+        return 1
+    fi
+
+    echo "✅ Successfully installed to /sbin/$program_name"
+    echo "Binary size: $(du -h "/sbin/$program_name" | cut -f1)"
     echo
+
+    # Service-Datei installieren
     echo "Installing systemd service..."
     sudo cp "service/kdmsg-tui.service" "/lib/systemd/system/"
     sudo chmod 644 "/lib/systemd/system/kdmsg-tui.service"
 
-    # systemd neu laden und Service aktivieren
-    echo
-    echo "Reloading systemd and enabling service..."
+    # systemd neu laden
+    echo "Reloading systemd..."
     sudo systemctl daemon-reload
     sudo systemctl enable --now kdmsg-tui.service
 
-    read -r -p "Run the program? Type yes/no (Enter = yes): " answer
+    # Benutzerabfrage
+    read -p "Run the program? [Y/n] " answer
     case "$answer" in
-        ""|y|Y|yes|YES)
-            echo
+        ""|[yY]|[yY][eE][sS])
             echo "Starting program..."
-            sudo "$program_name"  # Als root ausführen
-            ;;
-        n|N|no|NO)
-            echo "Program was not started."
+            sudo "/sbin/$program_name"
             ;;
         *)
-            echo "Invalid answer. Program was not started."
+            echo "Program not started."
             ;;
     esac
 }
