@@ -90,7 +90,7 @@ main() {
     if [[ -z "$program_name" ]]; then
         echo "Error: Could not determine the package name from Cargo.toml."
         return 1
- fi
+    fi
 
     echo "Package name: $program_name"
     echo
@@ -139,15 +139,19 @@ main() {
     echo "Program is available at:"
     echo "./target/release/$program_name"
 
-    # ADDITION: Meson installation after successful build
+    # Installation nach /sbin
     echo
-    echo "Installing with Meson..."
-    if [[ ! -d "build" ]]; then
-        meson setup build
-    fi
-    sudo meson install -C build --only-changed
+    echo "Installing binary to /sbin..."
+    sudo cp "target/release/$program_name" "/sbin/$program_name"
+    sudo chmod 755 "/sbin/$program_name"
 
-    # ADDITION: systemd service handling
+    # Installation der systemd-Service-Datei
+    echo
+    echo "Installing systemd service..."
+    sudo cp "service/kdmsg-tui.service" "/lib/systemd/system/"
+    sudo chmod 644 "/lib/systemd/system/kdmsg-tui.service"
+
+    # systemd neu laden
     echo
     echo "Reloading systemd..."
     sudo systemctl daemon-reload
@@ -158,7 +162,7 @@ main() {
         ""|y|Y|yes|YES)
             echo
             echo "Starting program..."
-            "./target/release/$program_name"
+            "$program_name"
             ;;
         n|N|no|NO)
             echo "Program was not started."
